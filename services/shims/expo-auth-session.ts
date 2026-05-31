@@ -5,9 +5,6 @@
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 
-export type ResponseType = string;
-export type Prompt = string;
-
 export const ResponseType = {
   Code: 'code',
   Token: 'token',
@@ -21,6 +18,16 @@ export const Prompt = {
   Consent: 'consent',
   SelectAccount: 'select_account',
 } as const;
+
+export const CodeChallengeMethod = {
+  S256: 'S256',
+  Plain: 'plain',
+} as const;
+
+export function maybeCompleteAuthSession(_options?: any): { type: 'success' | 'failed' | 'dismiss' } {
+  // No-op: web-only API; we handle OAuth via expo-web-browser directly.
+  return { type: 'dismiss' };
+}
 
 export type AuthRequestPromptOptions = {
   url?: string;
@@ -105,8 +112,47 @@ export const AuthSessionResult = {
   Error: 'error',
 } as const;
 
+export function loadAsync(_config?: any): Promise<AuthRequest> {
+  return Promise.resolve(new AuthRequest());
+}
+
+export function fetchDiscoveryAsync(_url: string): Promise<DiscoveryDocument> {
+  return Promise.resolve({});
+}
+
+export function getCurrentTimeInSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+export function generateHexStringAsync(_length: number): Promise<string> {
+  return Promise.resolve('');
+}
+
+export const TokenType = {
+  Bearer: 'Bearer',
+  MAC: 'MAC',
+} as const;
+
+export class TokenResponse {
+  accessToken: string = '';
+  refreshToken?: string;
+  idToken?: string;
+  tokenType: string = 'Bearer';
+  expiresIn?: number;
+  scope?: string;
+  state?: string;
+  issuedAt: number = getCurrentTimeInSeconds();
+  shouldRefresh(): boolean {
+    return false;
+  }
+  static fromQueryParams(_params: any): TokenResponse {
+    return new TokenResponse();
+  }
+}
+
 export default {
   makeRedirectUri,
+  maybeCompleteAuthSession,
   useAuthRequest,
   useAutoDiscovery,
   exchangeCodeAsync,
@@ -114,8 +160,15 @@ export default {
   revokeAsync,
   startAsync,
   dismiss,
+  loadAsync,
+  fetchDiscoveryAsync,
+  getCurrentTimeInSeconds,
+  generateHexStringAsync,
   AuthRequest,
   AuthSession,
+  TokenResponse,
   ResponseType,
   Prompt,
+  CodeChallengeMethod,
+  TokenType,
 };
