@@ -69,7 +69,7 @@
     "@privacyresearch/libsignal-protocol-typescript": "0.0.16",
     "@react-native-picker/picker": "2.11.0",
     "@react-navigation/native": "7.1.6",
-    "lucide-react-native": "^0.475.0",
+   
     "nativewind": "^4.1.23",
     "zustand": "^5.0.2",
     "react-native-svg": "15.11.2",
