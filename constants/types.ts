@@ -179,6 +179,50 @@ export type Expense = {
   userName: string;
 };
 
+export type CustomerPayment = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  date: number;
+  notes: string;
+  userId: string;
+  userName: string;
+};
+
+export type Worker = {
+  id: string;
+  name: string;
+  phone: string;
+  jobTitle: string;
+  maxAllowed: number;
+  notes: string;
+  createdAt: number;
+};
+
+export type WorkerPayment = {
+  id: string;
+  workerId: string;
+  workerName: string;
+  amount: number;
+  date: number;
+  notes: string;
+  userId: string;
+  userName: string;
+};
+
+export type AppNotification = {
+  id: string;
+  type: 'join_request' | 'user_approved' | 'system' | 'low_stock';
+  title: string;
+  message: string;
+  refId?: string;
+  read: boolean;
+  date: number;
+};
+
+export type UserStatus = 'pending' | 'approved' | 'rejected';
+
 export type UserRole = 'owner' | 'manager' | 'head' | 'sales' | 'warehouse';
 
 export type Permission = {
@@ -221,6 +265,18 @@ export const ROLE_COLORS: Record<UserRole, { bg: string; fg: string }> = {
   head: { bg: '#FEF3C7', fg: '#92400E' },
   sales: { bg: '#D1FAE5', fg: '#065F46' },
   warehouse: { bg: '#FEE2E2', fg: '#991B1B' },
+};
+
+export const STATUS_LABELS: Record<UserStatus, string> = {
+  pending: 'قيد المراجعة',
+  approved: 'مقبول',
+  rejected: 'مرفوض',
+};
+
+export const STATUS_COLORS: Record<UserStatus, { bg: string; fg: string }> = {
+  pending: { bg: '#FEF3C7', fg: '#92400E' },
+  approved: { bg: '#D1FAE5', fg: '#065F46' },
+  rejected: { bg: '#FEE2E2', fg: '#991B1B' },
 };
 
 export function getPermissions(role: UserRole): Permission {
@@ -271,17 +327,21 @@ export type AppUser = {
   name: string;
   role: UserRole;
   active: boolean;
+  status: UserStatus;
   createdAt: number;
+  approvedAt?: number;
 };
 
 export type ActivityType =
   | 'login' | 'logout' | 'sale' | 'sale_delete' | 'purchase' | 'purchase_delete'
   | 'transfer' | 'transfer_delete' | 'sale_return' | 'purchase_return'
   | 'expense' | 'expense_delete' | 'product_add' | 'product_edit' | 'product_delete'
-  | 'customer_add' | 'customer_edit' | 'customer_delete'
+  | 'customer_add' | 'customer_edit' | 'customer_delete' | 'customer_payment' | 'customer_payment_delete'
   | 'supplier_add' | 'supplier_edit' | 'supplier_delete'
   | 'warehouse_add' | 'warehouse_edit' | 'warehouse_delete'
-  | 'user_add' | 'user_edit' | 'user_delete' | 'settings_update';
+  | 'worker_add' | 'worker_edit' | 'worker_delete' | 'worker_payment' | 'worker_payment_delete'
+  | 'user_add' | 'user_edit' | 'user_delete' | 'user_approve' | 'user_reject'
+  | 'settings_update';
 
 export type ActivityLog = {
   id: string;
@@ -304,4 +364,5 @@ export type Settings = {
   address: string;
   taxNumber: string;
   invoiceFooter: string;
+  adminPassword: string;
 };

@@ -15,6 +15,10 @@ export type AppDataBlob = {
   saleReturns: any[];
   purchaseReturns: any[];
   expenses: any[];
+  customerPayments: any[];
+  workers: any[];
+  workerPayments: any[];
+  notifications: any[];
   activityLog: any[];
   settings: any;
   invoiceCounter: number;
@@ -22,6 +26,8 @@ export type AppDataBlob = {
   transferCounter: number;
   saleReturnCounter: number;
   purchaseReturnCounter: number;
+  customerPaymentCounter: number;
+  workerPaymentCounter: number;
 };
 
 export type CloudResult<T> = {
@@ -90,6 +96,7 @@ export async function createAppUserRecord(record: {
   name: string;
   role: string;
   active: boolean;
+  status?: string;
 }) {
   return await supabase
     .from('app_users')

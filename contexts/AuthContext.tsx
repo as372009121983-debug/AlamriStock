@@ -12,7 +12,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { Session } from '@supabase/supabase-js';
 import { getSupabaseClient } from '@/template';
-import { AppUser, getPermissions, Permission, UserRole } from '@/constants/types';
+import { AppUser, getPermissions, Permission, UserRole, UserStatus } from '@/constants/types';
 import {
   createAppUserRecord,
   deleteAppUserRecord,
@@ -38,6 +38,7 @@ export type AuthContextType = {
   user: AppUser | null;
   session: Session | null;
   users: AppUser[];
+  pendingUsersCount: number;
   needsSetup: boolean;
   rememberMe: boolean;
   pendingSignup: PendingSignup | null;
@@ -46,54 +47,23 @@ export type AuthContextType = {
   canEdit: boolean;
   canManageUsers: boolean;
   canManageSettings: boolean;
-  signIn: (
-    email: string,
-    password: string,
-    remember?: boolean
-  ) => Promise<{ ok: boolean; message?: string }>;
-  // OTP-based signup flow
-  sendSignUpOTP: (data: {
-    name: string;
-    email: string;
-    password: string;
-  }) => Promise<{ ok: boolean; message?: string }>;
-  verifyEmailOTP: (
-    otp: string
-  ) => Promise<{ ok: boolean; message?: string }>;
+  signIn: (email: string, password: string, remember?: boolean) => Promise<{ ok: boolean; message?: string }>;
+  sendSignUpOTP: (data: { name: string; email: string; password: string }) => Promise<{ ok: boolean; message?: string }>;
+  verifyEmailOTP: (otp: string) => Promise<{ ok: boolean; message?: string }>;
   resendSignUpOTP: () => Promise<{ ok: boolean; message?: string }>;
   clearPendingSignup: () => void;
-  // Legacy direct signup (kept for backward compat, calls OTP flow)
-  signUp: (data: {
-    name: string;
-    email: string;
-    password: string;
-  }) => Promise<{ ok: boolean; message?: string; needsConfirmation?: boolean }>;
+  signUp: (data: { name: string; email: string; password: string }) => Promise<{ ok: boolean; message?: string; needsConfirmation?: boolean }>;
   signInWithGoogle: () => Promise<{ ok: boolean; message?: string }>;
   resetPassword: (email: string) => Promise<{ ok: boolean; message?: string }>;
   signOut: () => Promise<void>;
   logout: () => Promise<void>;
-  login: (
-    email: string,
-    password: string,
-    remember?: boolean
-  ) => Promise<{ ok: boolean; message?: string }>;
-  registerOwner: (data: {
-    name: string;
-    email: string;
-    password: string;
-  }) => Promise<{ ok: boolean; message?: string; needsConfirmation?: boolean }>;
-  addUser: (data: {
-    name: string;
-    email: string;
-    password: string;
-    role: UserRole;
-    active: boolean;
-  }) => Promise<{ ok: boolean; message?: string }>;
-  updateUser: (
-    id: string,
-    data: Partial<AppUser>
-  ) => Promise<{ ok: boolean; message?: string }>;
+  login: (email: string, password: string, remember?: boolean) => Promise<{ ok: boolean; message?: string }>;
+  registerOwner: (data: { name: string; email: string; password: string }) => Promise<{ ok: boolean; message?: string; needsConfirmation?: boolean }>;
+  addUser: (data: { name: string; email: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => Promise<{ ok: boolean; message?: string }>;
+  updateUser: (id: string, data: Partial<AppUser>) => Promise<{ ok: boolean; message?: string }>;
   deleteUser: (id: string) => Promise<{ ok: boolean; message?: string }>;
+  approveUser: (id: string) => Promise<{ ok: boolean; message?: string }>;
+  rejectUser: (id: string) => Promise<{ ok: boolean; message?: string }>;
 };
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -115,35 +85,23 @@ function buildUserFromSession(session: Session | null): AppUser | null {
       (email ? email.split('@')[0] : 'مستخدم'),
     role: 'owner',
     active: true,
+    status: 'approved',
     createdAt: u.created_at ? new Date(u.created_at).getTime() : Date.now(),
   };
 }
 
 function translateError(message: string): string {
   const m = (message || '').toLowerCase();
-  if (
-    m.includes('invalid login') ||
-    m.includes('invalid_grant') ||
-    m.includes('invalid credentials')
-  ) {
+  if (m.includes('invalid login') || m.includes('invalid_grant') || m.includes('invalid credentials')) {
     return 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
   }
-  if (
-    m.includes('user already registered') ||
-    m.includes('already registered') ||
-    m.includes('already exists') ||
-    (m.includes('duplicate') && m.includes('email'))
-  ) {
+  if (m.includes('user already registered') || m.includes('already registered') || m.includes('already exists') || (m.includes('duplicate') && m.includes('email'))) {
     return 'هذا البريد مسجل بالفعل، يمكنك تسجيل الدخول';
   }
   if (m.includes('email not confirmed') || m.includes('not confirmed')) {
     return 'يرجى تأكيد بريدك الإلكتروني أولاً';
   }
-  if (
-    m.includes('weak password') ||
-    m.includes('too short') ||
-    m.includes('password should be')
-  ) {
+  if (m.includes('weak password') || m.includes('too short') || m.includes('password should be')) {
     return 'كلمة المرور ضعيفة، استخدم 6 أحرف على الأقل';
   }
   if (m.includes('rate limit') || m.includes('too many')) {
@@ -155,12 +113,7 @@ function translateError(message: string): string {
   if (m.includes('user not found') || m.includes('no user')) {
     return 'البريد الإلكتروني غير مسجل، يمكنك إنشاء حساب جديد';
   }
-  if (
-    m.includes('provider is not enabled') ||
-    m.includes('provider not enabled') ||
-    (m.includes('oauth') && m.includes('not')) ||
-    m.includes('unsupported provider')
-  ) {
+  if (m.includes('provider is not enabled') || m.includes('provider not enabled') || (m.includes('oauth') && m.includes('not')) || m.includes('unsupported provider')) {
     return 'تسجيل الدخول بـ Google غير مفعّل، فعّله من لوحة OnSpace Cloud (User → Auth Settings)';
   }
   if (m.includes('network') || m.includes('fetch') || m.includes('failed to fetch')) {
@@ -187,7 +140,9 @@ function mapAppUserRow(row: any): AppUser {
     name: row.name || '',
     role: (row.role || 'sales') as UserRole,
     active: row.active !== false,
+    status: (row.status || 'approved') as UserStatus,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+    approvedAt: row.approved_at ? new Date(row.approved_at).getTime() : undefined,
   };
 }
 
@@ -223,6 +178,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const refreshUsers = useCallback(async () => {
+    if (!user) {
+      setUsers([]);
+      return;
+    }
+    const result = await fetchAppUsersList(user.id);
+    if (!result.error) {
+      setUsers(result.data.map(mapAppUserRow));
+    }
+  }, [user?.id]);
+
   useEffect(() => {
     if (!user) {
       setUsers([]);
@@ -240,6 +206,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [user?.id]);
+
+  // Periodic refresh of users for pending notifications
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(() => {
+      refreshUsers();
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [user?.id, refreshUsers]);
 
   const signIn = useCallback(
     async (email: string, password: string) => {
@@ -268,15 +243,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (data: { name: string; email: string; password: string }) => {
       const name = data.name.trim();
       if (!name) return { ok: false, message: 'الاسم الكامل مطلوب' };
-      if (!data.email.trim()) {
-        return { ok: false, message: 'البريد الإلكتروني مطلوب' };
-      }
-      if (!isValidEmail(data.email)) {
-        return { ok: false, message: 'البريد الإلكتروني غير صحيح' };
-      }
-      if (data.password.length < 6) {
-        return { ok: false, message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' };
-      }
+      if (!data.email.trim()) return { ok: false, message: 'البريد الإلكتروني مطلوب' };
+      if (!isValidEmail(data.email)) return { ok: false, message: 'البريد الإلكتروني غير صحيح' };
+      if (data.password.length < 6) return { ok: false, message: 'كلمة المرور يجب أن تكون 6 أحرف على الأقل' };
 
       setInitializing(true);
       try {
@@ -285,29 +254,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: lower,
           options: {
             shouldCreateUser: true,
-            data: {
-              name,
-              full_name: name,
-              username: name,
-            },
+            data: { name, full_name: name, username: name },
           },
         });
-
         if (error) {
           console.log('[SendOTP Error]', error.message);
           return { ok: false, message: translateError(error.message) };
         }
-
-        setPendingSignup({
-          email: lower,
-          name,
-          password: data.password,
-          sentAt: Date.now(),
-        });
-
+        setPendingSignup({ email: lower, name, password: data.password, sentAt: Date.now() });
         return { ok: true };
       } catch (e: any) {
-        console.log('[SendOTP Exception]', e);
         return { ok: false, message: translateError(e?.message || '') };
       } finally {
         setInitializing(false);
@@ -318,13 +274,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const verifyEmailOTP = useCallback(
     async (otp: string) => {
-      if (!pendingSignup) {
-        return { ok: false, message: 'لا يوجد طلب تحقق نشط، أعد إنشاء الحساب' };
-      }
+      if (!pendingSignup) return { ok: false, message: 'لا يوجد طلب تحقق نشط، أعد إنشاء الحساب' };
       const code = otp.trim().replace(/\s+/g, '');
-      if (code.length < 4) {
-        return { ok: false, message: 'يرجى إدخال رمز التحقق بالكامل' };
-      }
+      if (code.length < 4) return { ok: false, message: 'يرجى إدخال رمز التحقق بالكامل' };
 
       setInitializing(true);
       try {
@@ -333,21 +285,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           token: code,
           type: 'email',
         });
-
         if (error) {
-          console.log('[VerifyOTP Error]', error.message);
           return { ok: false, message: translateError(error.message) };
         }
-
         if (data.session && pendingSignup.password) {
-          try {
-            await supabase.auth.updateUser({
-              password: pendingSignup.password,
-            });
-          } catch (e) {
-            console.log('[UpdatePassword Failed]', e);
-          }
-
+          try { await supabase.auth.updateUser({ password: pendingSignup.password }); } catch {}
           if (data.user) {
             try {
               await supabase.from('user_profiles').upsert({
@@ -358,11 +300,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             } catch {}
           }
         }
-
         setPendingSignup(null);
         return { ok: true };
       } catch (e: any) {
-        console.log('[VerifyOTP Exception]', e);
         return { ok: false, message: translateError(e?.message || '') };
       } finally {
         setInitializing(false);
@@ -372,40 +312,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const resendSignUpOTP = useCallback(async () => {
-    if (!pendingSignup) {
-      return { ok: false, message: 'لا يوجد طلب تحقق نشط' };
-    }
+    if (!pendingSignup) return { ok: false, message: 'لا يوجد طلب تحقق نشط' };
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: pendingSignup.email,
         options: {
           shouldCreateUser: true,
-          data: {
-            name: pendingSignup.name,
-            full_name: pendingSignup.name,
-            username: pendingSignup.name,
-          },
+          data: { name: pendingSignup.name, full_name: pendingSignup.name, username: pendingSignup.name },
         },
       });
-
-      if (error) {
-        console.log('[ResendOTP Error]', error.message);
-        return { ok: false, message: translateError(error.message) };
-      }
-
+      if (error) return { ok: false, message: translateError(error.message) };
       setPendingSignup({ ...pendingSignup, sentAt: Date.now() });
       return { ok: true };
     } catch (e: any) {
-      console.log('[ResendOTP Exception]', e);
       return { ok: false, message: translateError(e?.message || '') };
     }
   }, [pendingSignup]);
 
-  const clearPendingSignup = useCallback(() => {
-    setPendingSignup(null);
-  }, []);
+  const clearPendingSignup = useCallback(() => setPendingSignup(null), []);
 
-  // Legacy alias - now triggers OTP flow
   const signUp = useCallback(
     async (data: { name: string; email: string; password: string }) => {
       const res = await sendSignUpOTP(data);
@@ -415,96 +340,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signInWithGoogle = useCallback(async () => {
-    if (googleLoading) {
-      return { ok: false, message: 'جاري المعالجة، يرجى الانتظار...' };
-    }
+    if (googleLoading) return { ok: false, message: 'جاري المعالجة، يرجى الانتظار...' };
     setGoogleLoading(true);
     try {
       const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
-      const redirectTo = isWeb
-        ? window.location.origin
-        : Linking.createURL('/auth/callback');
-
-      console.log('[Google] Starting OAuth flow, redirectTo:', redirectTo);
-
+      const redirectTo = isWeb ? window.location.origin : Linking.createURL('/auth/callback');
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo,
-          skipBrowserRedirect: !isWeb,
-        },
+        options: { redirectTo, skipBrowserRedirect: !isWeb },
       });
+      if (error) return { ok: false, message: translateError(error.message) };
+      if (isWeb) return { ok: true };
+      if (!data?.url) return { ok: false, message: 'تعذر بدء عملية تسجيل الدخول' };
 
-      if (error) {
-        console.log('[Google OAuth Error]', error.message);
-        return { ok: false, message: translateError(error.message) };
-      }
-
-      if (isWeb) {
-        return { ok: true };
-      }
-
-      if (!data?.url) {
-        return { ok: false, message: 'تعذر بدء عملية تسجيل الدخول' };
-      }
-
-      console.log('[Google] Opening browser:', data.url);
-      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, {
-        showInRecents: true,
-      });
-
-      console.log('[Google] Browser result:', result.type);
-
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo, { showInRecents: true });
       if (result.type === 'success' && result.url) {
         const url = result.url;
         const hashIndex = url.indexOf('#');
         const queryIndex = url.indexOf('?');
-        const fragment =
-          hashIndex >= 0
-            ? url.slice(hashIndex + 1)
-            : queryIndex >= 0
-            ? url.slice(queryIndex + 1)
-            : '';
+        const fragment = hashIndex >= 0 ? url.slice(hashIndex + 1) : queryIndex >= 0 ? url.slice(queryIndex + 1) : '';
         const params = new URLSearchParams(fragment);
-
         const access_token = params.get('access_token');
         const refresh_token = params.get('refresh_token');
         const errCode = params.get('error') || params.get('error_code');
         const errDesc = params.get('error_description');
-
-        if (errCode) {
-          console.log('[Google] OAuth error:', errCode, errDesc);
-          return {
-            ok: false,
-            message: errDesc ? translateError(errDesc) : translateError(errCode),
-          };
-        }
-
+        if (errCode) return { ok: false, message: errDesc ? translateError(errDesc) : translateError(errCode) };
         if (access_token && refresh_token) {
-          const { error: sessErr } = await supabase.auth.setSession({
-            access_token,
-            refresh_token,
-          });
-          if (sessErr) {
-            return { ok: false, message: translateError(sessErr.message) };
-          }
+          const { error: sessErr } = await supabase.auth.setSession({ access_token, refresh_token });
+          if (sessErr) return { ok: false, message: translateError(sessErr.message) };
           return { ok: true };
         }
-
         return { ok: false, message: 'تعذر استكمال تسجيل الدخول' };
       }
-
       if (result.type === 'cancel' || result.type === 'dismiss') {
         return { ok: false, message: 'تم إلغاء عملية تسجيل الدخول' };
       }
-
       return { ok: false, message: 'فشل تسجيل الدخول بـ Google' };
     } catch (e: any) {
-      console.log('[Google Sign-in Exception]', e);
-      return {
-        ok: false,
-        message: translateError(e?.message || 'فشل تسجيل الدخول'),
-      };
+      return { ok: false, message: translateError(e?.message || 'فشل تسجيل الدخول') };
     } finally {
       setGoogleLoading(false);
     }
@@ -513,14 +386,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const resetPassword = useCallback(async (email: string) => {
     if (!email.trim()) return { ok: false, message: 'البريد الإلكتروني مطلوب' };
     try {
-      const redirectTo =
-        Platform.OS === 'web' && typeof window !== 'undefined'
-          ? window.location.origin
-          : Linking.createURL('/auth/recovery');
-      const { error } = await supabase.auth.resetPasswordForEmail(
-        email.trim().toLowerCase(),
-        { redirectTo }
-      );
+      const redirectTo = Platform.OS === 'web' && typeof window !== 'undefined'
+        ? window.location.origin
+        : Linking.createURL('/auth/recovery');
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
       if (error) return { ok: false, message: translateError(error.message) };
       return { ok: true };
     } catch (e: any) {
@@ -534,22 +403,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addUser = useCallback(
-    async (data: {
-      name: string;
-      email: string;
-      password: string;
-      role: UserRole;
-      active: boolean;
-    }) => {
+    async (data: { name: string; email: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => {
       if (!user) return { ok: false, message: 'غير مسجل دخول' };
       if (!data.name.trim()) return { ok: false, message: 'الاسم مطلوب' };
       if (!data.email.trim()) return { ok: false, message: 'البريد الإلكتروني مطلوب' };
-      if (!isValidEmail(data.email)) {
-        return { ok: false, message: 'البريد الإلكتروني غير صحيح' };
-      }
-      if (!data.password.trim() || data.password.length < 4) {
-        return { ok: false, message: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' };
-      }
+      if (!isValidEmail(data.email)) return { ok: false, message: 'البريد الإلكتروني غير صحيح' };
+      if (!data.password.trim() || data.password.length < 4) return { ok: false, message: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' };
       const lower = data.email.trim().toLowerCase();
       if (users.some((u) => u.email.trim().toLowerCase() === lower)) {
         return { ok: false, message: 'هذا البريد مستخدم بالفعل' };
@@ -562,6 +421,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           name: data.name.trim(),
           role: data.role,
           active: data.active,
+          status: data.status || 'pending',
         });
         if (error) {
           if ((error.message || '').toLowerCase().includes('duplicate')) {
@@ -587,6 +447,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.password !== undefined) updates.password = data.password;
       if (data.role !== undefined) updates.role = data.role;
       if (data.active !== undefined) updates.active = data.active;
+      if (data.status !== undefined) {
+        updates.status = data.status;
+        if (data.status === 'approved') updates.approved_at = new Date().toISOString();
+      }
       try {
         const { error } = await updateAppUserRecord(id, updates);
         if (error) return { ok: false, message: translateError(error.message) };
@@ -597,9 +461,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   ...u,
                   ...(data as Partial<AppUser>),
                   email: data.email ? data.email.trim().toLowerCase() : u.email,
-                  username: data.email
-                    ? data.email.trim().toLowerCase()
-                    : u.username,
+                  username: data.email ? data.email.trim().toLowerCase() : u.username,
                 }
               : u
           )
@@ -627,9 +489,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user]
   );
 
-  const permissions = useMemo(
-    () => getPermissions(user?.role || 'owner'),
-    [user]
+  const approveUser = useCallback(
+    async (id: string) => {
+      return await updateUser(id, { status: 'approved', active: true });
+    },
+    [updateUser]
+  );
+
+  const rejectUser = useCallback(
+    async (id: string) => {
+      return await updateUser(id, { status: 'rejected', active: false });
+    },
+    [updateUser]
+  );
+
+  const permissions = useMemo(() => getPermissions(user?.role || 'owner'), [user]);
+
+  const pendingUsersCount = useMemo(
+    () => users.filter((u) => u.status === 'pending').length,
+    [users]
   );
 
   return (
@@ -641,6 +519,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         session,
         users,
+        pendingUsersCount,
         needsSetup: false,
         rememberMe: true,
         pendingSignup,
@@ -664,6 +543,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         addUser,
         updateUser,
         deleteUser,
+        approveUser,
+        rejectUser,
       }}
     >
       {children}

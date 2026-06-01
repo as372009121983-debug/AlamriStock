@@ -206,10 +206,16 @@ export default function DashboardScreen() {
             onPress={() => router.push('/returns')}
           />
           <QuickAction
-            label="التقارير"
-            icon="chart-box-outline"
+            label="الجرد"
+            icon="clipboard-list-outline"
             color={Colors.info}
-            onPress={() => router.push('/reports')}
+            onPress={() => router.push('/inventory')}
+          />
+          <QuickAction
+            label="الأرباح"
+            icon="trending-up"
+            color={Colors.success}
+            onPress={() => router.push('/profits')}
           />
         </View>
 

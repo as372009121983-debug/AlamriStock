@@ -15,7 +15,7 @@ import { ActivityType } from '@/constants/types';
 import { formatDateTime, formatNumber, inRange } from '@/services/format';
 import { buildReportHtml, performPrint, PrintAction, exportCsv } from '@/services/print';
 
-const TYPE_META: Record<ActivityType, { label: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; color: string }> = {
+const TYPE_META: Partial<Record<ActivityType, { label: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; color: string }>> = {
   login: { label: 'دخول', icon: 'login', color: Colors.info },
   logout: { label: 'خروج', icon: 'logout', color: Colors.textMuted },
   sale: { label: 'بيع', icon: 'cart-outline', color: Colors.primary },
@@ -34,15 +34,24 @@ const TYPE_META: Record<ActivityType, { label: string; icon: keyof typeof Materi
   customer_add: { label: 'إضافة عميل', icon: 'account-plus', color: Colors.success },
   customer_edit: { label: 'تعديل عميل', icon: 'account-edit', color: Colors.info },
   customer_delete: { label: 'حذف عميل', icon: 'account-minus', color: Colors.danger },
+  customer_payment: { label: 'دفعة عميل', icon: 'cash-multiple', color: Colors.success },
+  customer_payment_delete: { label: 'حذف دفعة', icon: 'cash-remove', color: Colors.danger },
   supplier_add: { label: 'إضافة مورد', icon: 'truck-plus', color: Colors.success },
   supplier_edit: { label: 'تعديل مورد', icon: 'truck-fast', color: Colors.info },
   supplier_delete: { label: 'حذف مورد', icon: 'truck-minus', color: Colors.danger },
   warehouse_add: { label: 'إضافة موقع', icon: 'warehouse', color: Colors.success },
   warehouse_edit: { label: 'تعديل موقع', icon: 'warehouse', color: Colors.info },
   warehouse_delete: { label: 'حذف موقع', icon: 'warehouse', color: Colors.danger },
+  worker_add: { label: 'إضافة عامل', icon: 'account-plus', color: Colors.success },
+  worker_edit: { label: 'تعديل عامل', icon: 'account-edit', color: Colors.info },
+  worker_delete: { label: 'حذف عامل', icon: 'account-minus', color: Colors.danger },
+  worker_payment: { label: 'قبض عامل', icon: 'account-cash', color: Colors.warning },
+  worker_payment_delete: { label: 'حذف قبض', icon: 'cash-remove', color: Colors.danger },
   user_add: { label: 'إضافة مستخدم', icon: 'account-plus', color: Colors.success },
   user_edit: { label: 'تعديل مستخدم', icon: 'account-edit', color: Colors.info },
   user_delete: { label: 'حذف مستخدم', icon: 'account-remove', color: Colors.danger },
+  user_approve: { label: 'قبول مستخدم', icon: 'account-check', color: Colors.success },
+  user_reject: { label: 'رفض مستخدم', icon: 'account-cancel', color: Colors.danger },
   settings_update: { label: 'تحديث إعدادات', icon: 'cog', color: Colors.primary },
 };
 

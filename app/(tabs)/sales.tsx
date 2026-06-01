@@ -6,7 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
-import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -15,9 +15,9 @@ import { formatCurrency, formatDateTime, formatNumber, isSameDay } from '@/servi
 
 export default function SalesScreen() {
   const router = useRouter();
-  const { sales, settings, deleteSale } = useStore();
+  const { sales, settings, deleteSale, saleReturns } = useStore();
   const { canEdit } = useAuth();
-  const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'today' | 'returned'>('all');
 
@@ -40,16 +40,19 @@ export default function SalesScreen() {
     return list;
   }, [sales, search, filter]);
 
+  // Sales total (excluding returns)
   const totals = useMemo(() => {
+    const totalReturns = saleReturns.reduce((s, r) => s + r.total, 0);
     const total = filtered.reduce((s, sa) => s + sa.total, 0);
-    return { total, count: filtered.length };
-  }, [filtered]);
+    return { total, count: filtered.length, totalReturns };
+  }, [filtered, saleReturns]);
 
   function confirmDelete(saleId: string, invoiceNo: number) {
-    showAlert('حذف فاتورة', `هل تريد حذف الفاتورة #${invoiceNo}؟ سيتم استرجاع الكميات.`, [
-      { text: 'إلغاء', style: 'cancel' },
-      { text: 'حذف', style: 'destructive', onPress: () => deleteSale(saleId) },
-    ]);
+    guard({
+      title: 'حذف فاتورة',
+      description: `أدخل كلمة مرور المدير لحذف الفاتورة #${invoiceNo}`,
+      action: () => deleteSale(saleId),
+    });
   }
 
   return (
@@ -72,9 +75,12 @@ export default function SalesScreen() {
       />
       <View style={styles.summary}>
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>الإجمالي</Text>
+          <Text style={styles.summaryLabel}>إجمالي المبيعات</Text>
           <Text style={styles.summaryValue}>
             {formatCurrency(totals.total, settings.currency)}
+          </Text>
+          <Text style={styles.returnsHint}>
+            * المرتجعات منفصلة ({formatCurrency(totals.totalReturns, settings.currency)})
           </Text>
         </View>
         <View style={[styles.summaryCard, { backgroundColor: Colors.primary }]}>
@@ -227,6 +233,7 @@ const styles = StyleSheet.create({
     color: Colors.text,
     marginTop: 6,
   },
+  returnsHint: { fontSize: 10, color: Colors.danger, marginTop: 4 },
   toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   tabs: {
     flexDirection: 'row-reverse',

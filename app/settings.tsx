@@ -7,19 +7,22 @@ import * as ImagePicker from 'expo-image-picker';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { SectionTitle } from '@/components/ui/SectionTitle';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
 import { exportAll, importAll } from '@/services/storage';
+import { uploadImage } from '@/services/imageUpload';
 
 const CURRENCIES = ['ج.م', 'ر.س', 'د.إ', 'د.ك', 'د.ع', 'ر.ق', '$', '€'];
 
 export default function SettingsScreen() {
   const { settings, updateSettings, resetAll, sales, products, customers, suppliers, purchases } = useStore();
-  const { canEdit } = useAuth();
+  const { canEdit, user } = useAuth();
   const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
   const [companyName, setCompanyName] = useState(settings.companyName);
   const [appTitle, setAppTitle] = useState(settings.appTitle);
   const [phone, setPhone] = useState(settings.phone);
@@ -28,15 +31,19 @@ export default function SettingsScreen() {
   const [invoiceFooter, setInvoiceFooter] = useState(settings.invoiceFooter);
   const [currency, setCurrency] = useState(settings.currency);
   const [logo, setLogo] = useState(settings.logo);
+  const [adminPassword, setAdminPassword] = useState(settings.adminPassword || '0');
+  const [showPwd, setShowPwd] = useState(false);
   const [backup, setBackup] = useState('');
+  const [uploading, setUploading] = useState(false);
 
   function save() {
     updateSettings({
       companyName: companyName.trim() || 'متجري',
       appTitle: appTitle.trim() || 'نظام إدارة',
       phone, address, taxNumber, invoiceFooter, currency, logo,
+      adminPassword: adminPassword.trim() || '0',
     });
-    showAlert('تم الحفظ', 'تم تحديث بيانات الشركة بنجاح');
+    showAlert('تم الحفظ', 'تم تحديث الإعدادات بنجاح');
   }
   async function pickLogo() {
     try {
@@ -51,8 +58,16 @@ export default function SettingsScreen() {
         aspect: [1, 1],
         quality: 0.6,
       });
-      if (!res.canceled && res.assets[0]) {
-        setLogo(res.assets[0].uri);
+      if (!res.canceled && res.assets[0] && user?.id) {
+        setUploading(true);
+        const result = await uploadImage(res.assets[0].uri, user.id, 'logo');
+        setUploading(false);
+        if (result.ok && result.url) {
+          setLogo(result.url);
+          showAlert('تم الرفع', 'تم رفع الشعار سحابياً');
+        } else {
+          showAlert('خطأ', result.error || 'تعذر رفع الشعار');
+        }
       }
     } catch {
       showAlert('خطأ', 'تعذر اختيار الصورة');
@@ -72,34 +87,28 @@ export default function SettingsScreen() {
       showAlert('تنبيه', 'الصق بيانات النسخة الاحتياطية في الصندوق أولاً');
       return;
     }
-    showAlert('استعادة البيانات', 'سيتم استبدال جميع البيانات الحالية. هل أنت متأكد؟', [
-      { text: 'إلغاء', style: 'cancel' },
-      {
-        text: 'استعادة',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await importAll(backup);
-            showAlert('تم', 'تم استعادة البيانات. يرجى إعادة تشغيل التطبيق.');
-          } catch {
-            showAlert('خطأ', 'تعذر قراءة النسخة الاحتياطية');
-          }
-        },
+    guard({
+      title: 'استعادة البيانات',
+      description: 'سيتم استبدال جميع البيانات الحالية',
+      action: async () => {
+        try {
+          await importAll(backup);
+          showAlert('تم', 'تم استعادة البيانات. يرجى إعادة تشغيل التطبيق.');
+        } catch {
+          showAlert('خطأ', 'تعذر قراءة النسخة الاحتياطية');
+        }
       },
-    ]);
+    });
   }
   function handleReset() {
-    showAlert('حذف جميع البيانات', 'سيتم حذف جميع البيانات نهائياً. لا يمكن التراجع.', [
-      { text: 'إلغاء', style: 'cancel' },
-      {
-        text: 'حذف الكل',
-        style: 'destructive',
-        onPress: async () => {
-          await resetAll();
-          showAlert('تم', 'تم حذف جميع البيانات');
-        },
+    guard({
+      title: 'حذف جميع البيانات',
+      description: 'سيتم حذف جميع البيانات نهائياً. لا يمكن التراجع.',
+      action: async () => {
+        await resetAll();
+        showAlert('تم', 'تم حذف جميع البيانات');
       },
-    ]);
+    });
   }
 
   return (
@@ -116,10 +125,20 @@ export default function SettingsScreen() {
             </View>
           )}
           <View style={{ flex: 1, gap: Spacing.sm }}>
-            <Button title="اختيار شعار" icon="image-plus" variant="secondary" onPress={pickLogo} />
+            <Button
+              title={uploading ? 'جاري الرفع...' : 'اختيار شعار'}
+              icon="image-plus"
+              variant="secondary"
+              onPress={pickLogo}
+              loading={uploading}
+            />
             {logo ? (
               <Button title="حذف الشعار" icon="close" variant="outline" size="sm" onPress={() => setLogo('')} />
             ) : null}
+            <View style={styles.cloudHint}>
+              <MaterialCommunityIcons name="cloud-check" size={14} color={Colors.info} />
+              <Text style={styles.cloudHintText}>الشعار يُحفظ سحابياً</Text>
+            </View>
           </View>
         </View>
 
@@ -131,6 +150,33 @@ export default function SettingsScreen() {
           <Input label="العنوان" value={address} onChangeText={setAddress} multiline />
           <Input label="الرقم الضريبي" value={taxNumber} onChangeText={setTaxNumber} />
           <Input label="نص ذيل الفاتورة" value={invoiceFooter} onChangeText={setInvoiceFooter} placeholder="شكراً لتعاملكم معنا" />
+        </View>
+
+        <SectionTitle title="كلمة مرور المدير" />
+        <View style={[styles.card, { gap: Spacing.sm }]}>
+          <View style={styles.pwdHint}>
+            <MaterialCommunityIcons name="shield-lock" size={16} color={Colors.warning} />
+            <Text style={styles.pwdHintText}>
+              تُطلب هذه الكلمة عند تعديل أو حذف الفواتير والمنتجات والبيانات الحساسة
+            </Text>
+          </View>
+          <View style={styles.pwdRow}>
+            <Pressable onPress={() => setShowPwd((s) => !s)} hitSlop={8}>
+              <MaterialCommunityIcons
+                name={showPwd ? 'eye-off-outline' : 'eye-outline'}
+                size={20}
+                color={Colors.textMuted}
+              />
+            </Pressable>
+            <Input
+              label=""
+              value={adminPassword}
+              onChangeText={setAdminPassword}
+              secureTextEntry={!showPwd}
+              placeholder="0"
+              containerStyle={{ flex: 1 }}
+            />
+          </View>
         </View>
 
         <SectionTitle title="العملة" />
@@ -184,7 +230,7 @@ export default function SettingsScreen() {
 
         <View style={{ alignItems: 'center', gap: 4, marginTop: Spacing.xl, paddingBottom: Spacing.xl }}>
           <Text style={styles.developer}>تطوير وملكية: {settings.ownerName}</Text>
-          <Text style={styles.version}>الإصدار 2.0.0</Text>
+          <Text style={styles.version}>الإصدار 4.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -197,7 +243,12 @@ const styles = StyleSheet.create({
   logoCard: { flexDirection: 'row-reverse', gap: Spacing.md, backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, alignItems: 'center' },
   logoImg: { width: 80, height: 80, borderRadius: Radius.lg, backgroundColor: Colors.surfaceAlt },
   logoPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  cloudHint: { flexDirection: 'row-reverse', alignItems: 'center', gap: 4 },
+  cloudHintText: { color: Colors.info, fontSize: FontSize.xs },
   card: { backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, gap: Spacing.md, ...Shadow.sm },
+  pwdHint: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, backgroundColor: Colors.warningSoft, padding: Spacing.sm, borderRadius: Radius.sm },
+  pwdHintText: { flex: 1, color: Colors.warning, fontSize: FontSize.xs, textAlign: 'right' },
+  pwdRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: Spacing.sm },
   currencyChip: { paddingHorizontal: Spacing.lg, paddingVertical: 10, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.full, minWidth: 64, alignItems: 'center' },
   currencyChipActive: { backgroundColor: Colors.primary },
   currencyText: { color: Colors.text, fontWeight: FontWeight.semibold, fontSize: FontSize.md },

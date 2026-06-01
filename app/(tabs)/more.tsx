@@ -19,6 +19,7 @@ type Item = {
   route: string;
   count?: number;
   badge?: string;
+  alert?: number;
 };
 
 export default function MoreScreen() {
@@ -31,9 +32,11 @@ export default function MoreScreen() {
     saleReturns,
     purchaseReturns,
     expenses,
+    customerPayments,
+    workers,
     settings,
   } = useStore();
-  const { user, isOwner, logout } = useAuth();
+  const { user, isOwner, logout, pendingUsersCount } = useAuth();
 
   const sections: { title: string; items: Item[] }[] = [
     {
@@ -78,6 +81,98 @@ export default function MoreScreen() {
       ],
     },
     {
+      title: 'المالية',
+      items: [
+        {
+          title: 'دفعات العملاء',
+          subtitle: 'تحصيل وسداد ديون العملاء',
+          icon: 'cash-multiple',
+          color: Colors.success,
+          bg: Colors.successSoft,
+          route: '/customer-payments',
+          count: customerPayments.length,
+        },
+        {
+          title: 'قبض العمال',
+          subtitle: 'صرف مرتبات العمال مع حد أعلى',
+          icon: 'account-cash-outline',
+          color: Colors.warning,
+          bg: Colors.warningSoft,
+          route: '/workers',
+          count: workers.length,
+        },
+        {
+          title: 'المصروفات',
+          subtitle: 'تسجيل المصاريف',
+          icon: 'cash-minus',
+          color: Colors.danger,
+          bg: Colors.dangerSoft,
+          route: '/expenses',
+          count: expenses.length,
+        },
+      ],
+    },
+    {
+      title: 'المرتجعات',
+      items: [
+        {
+          title: 'مرتجعات البيع',
+          subtitle: 'مرتجعات الفواتير من العملاء',
+          icon: 'undo-variant',
+          color: Colors.danger,
+          bg: Colors.dangerSoft,
+          route: '/returns',
+          count: saleReturns.length,
+        },
+        {
+          title: 'مرتجعات الشراء',
+          subtitle: 'مرتجعات للموردين',
+          icon: 'redo-variant',
+          color: Colors.warning,
+          bg: Colors.warningSoft,
+          route: '/purchase-returns',
+          count: purchaseReturns.length,
+        },
+      ],
+    },
+    {
+      title: 'التقارير المالية',
+      items: [
+        {
+          title: 'اليومية',
+          subtitle: 'الوارد والمنصرف وصافي النقدية',
+          icon: 'calendar-today',
+          color: Colors.info,
+          bg: Colors.infoSoft,
+          route: '/journal',
+        },
+        {
+          title: 'الجرد',
+          subtitle: 'قيمة المخزون بسعري الشراء والبيع',
+          icon: 'clipboard-list-outline',
+          color: Colors.primary,
+          bg: Colors.primarySoft,
+          route: '/inventory',
+        },
+        {
+          title: 'الأرباح',
+          subtitle: 'الربح حسب الفترة والمنتج والفاتورة',
+          icon: 'trending-up',
+          color: Colors.success,
+          bg: Colors.successSoft,
+          route: '/profits',
+        },
+        {
+          title: 'البيان',
+          subtitle: 'سجل العمليات بالتفصيل',
+          icon: 'history',
+          color: Colors.textSecondary,
+          bg: Colors.surfaceAlt,
+          route: '/activity-log',
+        },
+      ],
+    },
+    {
       title: 'الاستيراد والذكاء الاصطناعي',
       items: [
         {
@@ -116,82 +211,33 @@ export default function MoreScreen() {
       ],
     },
     {
-      title: 'المرتجعات والمصروفات',
-      items: [
-        {
-          title: 'مرتجعات البيع',
-          subtitle: 'إدارة مرتجعات الفواتير',
-          icon: 'undo-variant',
-          color: Colors.danger,
-          bg: Colors.dangerSoft,
-          route: '/returns',
-          count: saleReturns.length,
-        },
-        {
-          title: 'مرتجعات الشراء',
-          subtitle: 'مرتجعات للموردين',
-          icon: 'redo-variant',
-          color: Colors.warning,
-          bg: Colors.warningSoft,
-          route: '/purchase-returns',
-          count: purchaseReturns.length,
-        },
-        {
-          title: 'المصروفات',
-          subtitle: 'تسجيل المصاريف',
-          icon: 'cash-minus',
-          color: Colors.danger,
-          bg: Colors.dangerSoft,
-          route: '/expenses',
-          count: expenses.length,
-        },
-      ],
-    },
-    {
-      title: 'التقارير والمتابعة',
-      items: [
-        {
-          title: 'اليومية',
-          subtitle: 'يومية النشاط والمبيعات',
-          icon: 'calendar-today',
-          color: Colors.info,
-          bg: Colors.infoSoft,
-          route: '/journal',
-        },
-        {
-          title: 'البيان',
-          subtitle: 'سجل العمليات بالتفصيل',
-          icon: 'history',
-          color: Colors.primary,
-          bg: Colors.primarySoft,
-          route: '/activity-log',
-        },
-        {
-          title: 'التقارير',
-          subtitle: 'تقارير المبيعات والأرباح',
-          icon: 'chart-box-outline',
-          color: Colors.success,
-          bg: Colors.successSoft,
-          route: '/reports',
-        },
-      ],
-    },
-    {
       title: 'الإعدادات',
       items: [
         ...(isOwner
-          ? [{
-              title: 'المستخدمون',
-              subtitle: 'إدارة الحسابات والصلاحيات',
-              icon: 'account-multiple-outline' as const,
-              color: Colors.warning,
-              bg: Colors.warningSoft,
-              route: '/users',
-            }]
+          ? [
+              {
+                title: 'المستخدمون',
+                subtitle: 'إدارة الحسابات والصلاحيات',
+                icon: 'account-multiple-outline' as const,
+                color: Colors.warning,
+                bg: Colors.warningSoft,
+                route: '/users',
+                alert: pendingUsersCount,
+              },
+              {
+                title: 'طلبات الانضمام',
+                subtitle: 'مراجعة طلبات المستخدمين الجدد',
+                icon: 'account-clock-outline' as const,
+                color: Colors.danger,
+                bg: Colors.dangerSoft,
+                route: '/join-requests',
+                alert: pendingUsersCount,
+              },
+            ]
           : []),
         {
           title: 'الإعدادات',
-          subtitle: 'بيانات الشركة والعملة',
+          subtitle: 'بيانات الشركة والعملة وكلمة مرور المدير',
           icon: 'cog-outline',
           color: Colors.primary,
           bg: Colors.primarySoft,
@@ -227,6 +273,22 @@ export default function MoreScreen() {
           </View>
         </View>
 
+        {pendingUsersCount > 0 && isOwner ? (
+          <Pressable
+            onPress={() => router.push('/join-requests')}
+            style={({ pressed }) => [styles.alertBanner, pressed && { opacity: 0.85 }]}
+          >
+            <MaterialCommunityIcons name="bell-alert" size={22} color={Colors.danger} />
+            <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
+              <Text style={styles.alertTitle}>طلبات انضمام جديدة</Text>
+              <Text style={styles.alertSub}>
+                {pendingUsersCount} طلب بانتظار الموافقة
+              </Text>
+            </View>
+            <MaterialCommunityIcons name="chevron-left" size={22} color={Colors.danger} />
+          </Pressable>
+        ) : null}
+
         {sections.map((section) => (
           <View key={section.title} style={{ marginTop: Spacing.md }}>
             <Text style={styles.sectionLabel}>{section.title}</Text>
@@ -246,6 +308,11 @@ export default function MoreScreen() {
                     <Text style={styles.rowTitle}>{item.title}</Text>
                     <Text style={styles.rowSub} numberOfLines={1}>{item.subtitle}</Text>
                   </View>
+                  {item.alert && item.alert > 0 ? (
+                    <View style={styles.alertBadge}>
+                      <Text style={styles.alertBadgeText}>{formatNumber(item.alert)}</Text>
+                    </View>
+                  ) : null}
                   {item.count !== undefined ? (
                     <View style={styles.countBadge}>
                       <Text style={styles.countText}>{formatNumber(item.count)}</Text>
@@ -275,7 +342,7 @@ export default function MoreScreen() {
 
         <View style={{ alignItems: 'center', gap: 4, marginTop: Spacing.xl }}>
           <Text style={styles.developer}>تطوير وملكية: {settings.ownerName}</Text>
-          <Text style={styles.version}>الإصدار 3.0.0</Text>
+          <Text style={styles.version}>الإصدار 4.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -313,6 +380,28 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
   },
   roleText: { color: Colors.primary, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  alertBanner: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: Colors.dangerSoft,
+    borderRadius: Radius.lg,
+    padding: Spacing.md,
+    marginTop: Spacing.md,
+    borderWidth: 1.5,
+    borderColor: Colors.danger,
+  },
+  alertTitle: { color: Colors.danger, fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  alertSub: { color: Colors.danger, fontSize: FontSize.xs, marginTop: 2 },
+  alertBadge: {
+    backgroundColor: Colors.danger,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: Radius.full,
+    marginLeft: Spacing.sm,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  alertBadgeText: { color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold },
   sectionLabel: {
     fontSize: FontSize.sm,
     fontWeight: FontWeight.semibold,

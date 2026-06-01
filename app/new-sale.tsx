@@ -45,7 +45,6 @@ export default function NewSaleScreen() {
   const [productPickerVisible, setProductPickerVisible] = useState(false);
   const [customerPickerVisible, setCustomerPickerVisible] = useState(false);
   const [warehousePickerVisible, setWarehousePickerVisible] = useState(false);
-  const [pricePickerProduct, setPricePickerProduct] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
   const subtotal = useMemo(
@@ -129,9 +128,33 @@ export default function NewSaleScreen() {
     updateItem(productId, { quantity: newQty });
   }
 
+  function setQtyManual(productId: string, value: string) {
+    const num = Number(value.replace(/[^0-9.]/g, '')) || 0;
+    const item = items.find((it) => it.productId === productId);
+    if (!item) return;
+    const stock = warehouseId ? getStock(productId, warehouseId) : 0;
+    if (num <= 0) {
+      removeItem(productId);
+      return;
+    }
+    if (num > stock) {
+      showAlert('تنبيه', `الكمية المتاحة ${formatNumber(stock)} فقط`);
+      updateItem(productId, { quantity: stock });
+      return;
+    }
+    updateItem(productId, { quantity: num });
+  }
+
   function pickPriceTier(productId: string, label: string, price: number) {
     updateItem(productId, { price, priceLabel: label });
-    setPricePickerProduct(null);
+  }
+
+  function getProductPrices(productId: string): { id: string; label: string; price: number }[] {
+    const p = products.find((x) => x.id === productId);
+    if (!p) return [];
+    const list = [{ id: 'retail', label: 'قطاعي', price: p.salePrice }];
+    (p.prices || []).forEach((pr) => list.push({ id: pr.id, label: pr.label, price: pr.price }));
+    return list;
   }
 
   function handleSave() {
@@ -160,13 +183,6 @@ export default function NewSaleScreen() {
       router.replace(`/invoice/${result.sale.id}` as any);
     }
   }
-
-  const pricePickerItem = pricePickerProduct
-    ? items.find((it) => it.productId === pricePickerProduct)
-    : null;
-  const pricePickerProductData = pricePickerProduct
-    ? products.find((p) => p.id === pricePickerProduct)
-    : null;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -220,52 +236,72 @@ export default function NewSaleScreen() {
             </View>
           ) : (
             items.map((it) => {
-              const prod = products.find((p) => p.id === it.productId);
-              const hasMultiPrice = prod && prod.prices && prod.prices.length > 0;
+              const prices = getProductPrices(it.productId);
+              const stock = warehouseId ? getStock(it.productId, warehouseId) : 0;
               return (
                 <View key={it.productId} style={styles.itemCard}>
-                  <Pressable onPress={() => removeItem(it.productId)} hitSlop={8} style={styles.removeBtn}>
-                    <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
-                  </Pressable>
-                  <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-                    <Text style={styles.itemName} numberOfLines={1}>
-                      {it.name}
-                    </Text>
-                    <Pressable
-                      disabled={!hasMultiPrice}
-                      onPress={() => setPricePickerProduct(it.productId)}
-                      style={styles.priceTierTag}
-                    >
-                      <Text style={styles.priceTierText}>{it.priceLabel}</Text>
-                      {hasMultiPrice ? (
-                        <MaterialCommunityIcons
-                          name="chevron-down"
-                          size={12}
-                          color={Colors.primary}
-                        />
-                      ) : null}
+                  <View style={styles.itemHeader}>
+                    <Pressable onPress={() => removeItem(it.productId)} hitSlop={8} style={styles.removeBtn}>
+                      <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
                     </Pressable>
-                    <Text style={styles.itemPrice}>
-                      {formatCurrency(it.price, settings.currency)} × {formatNumber(it.quantity)}
-                    </Text>
-                    <Text style={styles.itemTotal}>
-                      {formatCurrency(it.price * it.quantity, settings.currency)}
-                    </Text>
+                    <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
+                      <Text style={styles.itemName} numberOfLines={1}>{it.name}</Text>
+                      <Text style={styles.itemMeta}>المتاح: {formatNumber(stock)}</Text>
+                    </View>
                   </View>
-                  <View style={styles.qtyControl}>
-                    <Pressable
-                      onPress={() => changeQty(it.productId, +1)}
-                      style={({ pressed }) => [styles.qtyBtn, pressed && { opacity: 0.7 }]}
-                    >
-                      <MaterialCommunityIcons name="plus" size={18} color={Colors.primary} />
-                    </Pressable>
-                    <Text style={styles.qtyValue}>{formatNumber(it.quantity)}</Text>
-                    <Pressable
-                      onPress={() => changeQty(it.productId, -1)}
-                      style={({ pressed }) => [styles.qtyBtn, pressed && { opacity: 0.7 }]}
-                    >
-                      <MaterialCommunityIcons name="minus" size={18} color={Colors.primary} />
-                    </Pressable>
+
+                  <View style={styles.priceTiersRow}>
+                    {prices.map((pr) => {
+                      const active = it.priceLabel === pr.label;
+                      return (
+                        <Pressable
+                          key={pr.id}
+                          onPress={() => pickPriceTier(it.productId, pr.label, pr.price)}
+                          style={({ pressed }) => [
+                            styles.priceTierChip,
+                            active && styles.priceTierChipActive,
+                            pressed && { opacity: 0.85 },
+                          ]}
+                        >
+                          <Text style={[styles.priceTierLabel, active && { color: Colors.white }]}>
+                            {pr.label}
+                          </Text>
+                          <Text style={[styles.priceTierValue, active && { color: Colors.white }]}>
+                            {formatCurrency(pr.price, settings.currency)}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <View style={styles.qtyTotalRow}>
+                    <View style={styles.qtyControl}>
+                      <Pressable
+                        onPress={() => changeQty(it.productId, +1)}
+                        style={({ pressed }) => [styles.qtyBtn, pressed && { opacity: 0.7 }]}
+                      >
+                        <MaterialCommunityIcons name="plus" size={18} color={Colors.primary} />
+                      </Pressable>
+                      <Input
+                        value={String(it.quantity)}
+                        onChangeText={(t) => setQtyManual(it.productId, t)}
+                        keyboardType="decimal-pad"
+                        containerStyle={{ width: 80 }}
+                        style={{ textAlign: 'center', minHeight: 40, paddingVertical: 8 }}
+                      />
+                      <Pressable
+                        onPress={() => changeQty(it.productId, -1)}
+                        style={({ pressed }) => [styles.qtyBtn, pressed && { opacity: 0.7 }]}
+                      >
+                        <MaterialCommunityIcons name="minus" size={18} color={Colors.primary} />
+                      </Pressable>
+                    </View>
+                    <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                      <Text style={styles.itemTotalLabel}>الإجمالي</Text>
+                      <Text style={styles.itemTotal}>
+                        {formatCurrency(it.price * it.quantity, settings.currency)}
+                      </Text>
+                    </View>
                   </View>
                 </View>
               );
@@ -353,6 +389,11 @@ export default function NewSaleScreen() {
                   <Text style={styles.pickerRowSub}>
                     {formatCurrency(p.salePrice, settings.currency)} • متاح: {formatNumber(stock)}
                   </Text>
+                  {p.prices && p.prices.length > 0 ? (
+                    <Text style={styles.pickerRowMeta}>
+                      {p.prices.length + 1} أسعار متاحة
+                    </Text>
+                  ) : null}
                 </View>
               </Pressable>
             );
@@ -432,60 +473,6 @@ export default function NewSaleScreen() {
           </Pressable>
         ))}
       </Modal>
-
-      <Modal
-        visible={!!pricePickerProduct}
-        onClose={() => setPricePickerProduct(null)}
-        title="اختر السعر"
-      >
-        {pricePickerProductData ? (
-          <>
-            <Pressable
-              onPress={() =>
-                pickPriceTier(
-                  pricePickerProductData.id,
-                  'قطاعي',
-                  pricePickerProductData.salePrice
-                )
-              }
-              style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.85 }]}
-            >
-              <MaterialCommunityIcons
-                name={
-                  pricePickerItem?.priceLabel === 'قطاعي' ? 'check-circle' : 'circle-outline'
-                }
-                size={22}
-                color={pricePickerItem?.priceLabel === 'قطاعي' ? Colors.primary : Colors.textMuted}
-              />
-              <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-                <Text style={styles.pickerRowTitle}>قطاعي</Text>
-                <Text style={styles.pickerRowSub}>
-                  {formatCurrency(pricePickerProductData.salePrice, settings.currency)}
-                </Text>
-              </View>
-            </Pressable>
-            {pricePickerProductData.prices.map((pr) => (
-              <Pressable
-                key={pr.id}
-                onPress={() => pickPriceTier(pricePickerProductData.id, pr.label, pr.price)}
-                style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.85 }]}
-              >
-                <MaterialCommunityIcons
-                  name={pricePickerItem?.priceLabel === pr.label ? 'check-circle' : 'circle-outline'}
-                  size={22}
-                  color={pricePickerItem?.priceLabel === pr.label ? Colors.primary : Colors.textMuted}
-                />
-                <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-                  <Text style={styles.pickerRowTitle}>{pr.label}</Text>
-                  <Text style={styles.pickerRowSub}>
-                    {formatCurrency(pr.price, settings.currency)}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
-          </>
-        ) : null}
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -522,15 +509,15 @@ const styles = StyleSheet.create({
   },
   emptyText: { color: Colors.textSecondary, fontSize: FontSize.sm },
   itemCard: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
     backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     padding: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.border,
     ...Shadow.sm,
+    gap: Spacing.sm,
   },
+  itemHeader: { flexDirection: 'row-reverse', alignItems: 'center' },
   removeBtn: {
     width: 28,
     height: 28,
@@ -540,20 +527,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   itemName: { color: Colors.text, fontWeight: FontWeight.semibold, fontSize: FontSize.md },
-  priceTierTag: {
+  itemMeta: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 2 },
+  priceTiersRow: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6 },
+  priceTierChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  priceTierChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  priceTierLabel: { color: Colors.text, fontSize: 11, fontWeight: FontWeight.semibold },
+  priceTierValue: { color: Colors.primary, fontSize: 12, fontWeight: FontWeight.bold, marginTop: 2 },
+  qtyTotalRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 2,
-    backgroundColor: Colors.primarySoft,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: Radius.full,
-    marginTop: 4,
+    gap: Spacing.md,
+    paddingTop: Spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
   },
-  priceTierText: { color: Colors.primary, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  itemPrice: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 4 },
-  itemTotal: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.md, marginTop: 2 },
-  qtyControl: { alignItems: 'center', gap: 4 },
+  qtyControl: { flexDirection: 'row-reverse', alignItems: 'center', gap: 4 },
   qtyBtn: {
     width: 32,
     height: 32,
@@ -562,7 +559,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  qtyValue: { color: Colors.text, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+  itemTotalLabel: { color: Colors.textMuted, fontSize: FontSize.xs },
+  itemTotal: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.lg, marginTop: 2 },
   summary: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
@@ -599,5 +597,6 @@ const styles = StyleSheet.create({
   },
   pickerRowTitle: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
   pickerRowSub: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 2 },
+  pickerRowMeta: { color: Colors.primary, fontSize: 10, fontWeight: FontWeight.semibold, marginTop: 2 },
   empty: { textAlign: 'center', color: Colors.textSecondary, paddingVertical: Spacing.lg },
 });

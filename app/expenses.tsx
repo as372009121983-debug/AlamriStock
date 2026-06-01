@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -21,6 +22,7 @@ export default function ExpensesScreen() {
   const { expenses, settings, addExpense, updateExpense, deleteExpense } = useStore();
   const { canEdit } = useAuth();
   const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [category, setCategory] = useState('إيجار');
@@ -43,11 +45,17 @@ export default function ExpensesScreen() {
     setModalVisible(true);
   }
   function openEdit(e: Expense) {
-    setEditing(e);
-    setCategory(e.category);
-    setAmount(String(e.amount));
-    setNotes(e.notes);
-    setModalVisible(true);
+    guard({
+      title: 'تعديل مصروف',
+      description: `أدخل كلمة مرور المدير لتعديل ${e.category}`,
+      action: () => {
+        setEditing(e);
+        setCategory(e.category);
+        setAmount(String(e.amount));
+        setNotes(e.notes);
+        setModalVisible(true);
+      },
+    });
   }
   function handleSubmit() {
     const amt = Number(amount);
@@ -62,11 +70,12 @@ export default function ExpensesScreen() {
     }
     setModalVisible(false);
   }
-  function confirmDelete(id: string) {
-    showAlert('حذف مصروف', 'هل أنت متأكد؟', [
-      { text: 'إلغاء', style: 'cancel' },
-      { text: 'حذف', style: 'destructive', onPress: () => deleteExpense(id) },
-    ]);
+  function confirmDelete(e: Expense) {
+    guard({
+      title: 'حذف مصروف',
+      description: `أدخل كلمة مرور المدير لحذف ${e.category}`,
+      action: () => deleteExpense(e.id),
+    });
   }
 
   return (
@@ -113,7 +122,7 @@ export default function ExpensesScreen() {
             <View style={{ flexDirection: 'row-reverse', gap: 6 }}>
               {canEdit ? (
                 <>
-                  <Pressable onPress={() => confirmDelete(item.id)} hitSlop={8} style={styles.actBtn}>
+                  <Pressable onPress={() => confirmDelete(item)} hitSlop={8} style={styles.actBtn}>
                     <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
                   </Pressable>
                   <Pressable onPress={() => openEdit(item)} hitSlop={8} style={styles.actBtn}>

@@ -1,6 +1,7 @@
 // Powered by OnSpace.AI
 import React, { useEffect, useMemo, useState } from 'react';
-import { FlatList, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,6 +9,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Button } from '@/components/ui/Button';
@@ -17,6 +19,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
 import { Product, ProductPrice } from '@/constants/types';
 import { formatCurrency, formatNumber, generateId } from '@/services/format';
+import { uploadImages } from '@/services/imageUpload';
 
 type FormState = {
   name: string;
@@ -59,8 +62,9 @@ export default function ProductsScreen() {
     defaultMainWarehouseId,
     getStock,
   } = useStore();
-  const { canEdit } = useAuth();
+  const { canEdit, user } = useAuth();
   const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
   const params = useLocalSearchParams<{ new?: string }>();
 
   const [search, setSearch] = useState('');
@@ -68,8 +72,8 @@ export default function ProductsScreen() {
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
-  const [warehouseFilter, setWarehouseFilter] = useState<string>('all');
   const [zoomImage, setZoomImage] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const mainWarehouses = warehouses.filter((w) => w.type === 'main');
 
@@ -103,23 +107,29 @@ export default function ProductsScreen() {
   }
 
   function openEdit(product: Product) {
-    setEditing(product);
-    setForm({
-      name: product.name,
-      barcode: product.barcode,
-      category: product.category || '',
-      unit: product.unit || 'قطعة',
-      purchasePrice: String(product.purchasePrice),
-      salePrice: String(product.salePrice),
-      quantity: String(product.quantity),
-      lowStockAlert: String(product.lowStockAlert),
-      warehouseId: defaultMainWarehouseId || '',
-      prices: product.prices || [],
-      images: product.images || [],
-      notes: product.notes || '',
+    guard({
+      title: 'تعديل منتج',
+      description: `أدخل كلمة مرور المدير لتعديل "${product.name}"`,
+      action: () => {
+        setEditing(product);
+        setForm({
+          name: product.name,
+          barcode: product.barcode,
+          category: product.category || '',
+          unit: product.unit || 'قطعة',
+          purchasePrice: String(product.purchasePrice),
+          salePrice: String(product.salePrice),
+          quantity: String(product.quantity),
+          lowStockAlert: String(product.lowStockAlert),
+          warehouseId: defaultMainWarehouseId || '',
+          prices: product.prices || [],
+          images: product.images || [],
+          notes: product.notes || '',
+        });
+        setErrors({});
+        setModalVisible(true);
+      },
     });
-    setErrors({});
-    setModalVisible(true);
   }
 
   async function pickImage() {
@@ -159,7 +169,7 @@ export default function ProductsScreen() {
     setForm((p) => ({ ...p, prices: p.prices.filter((_, i) => i !== idx) }));
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     const next: Record<string, string> = {};
     if (!form.name.trim()) next.name = 'الاسم مطلوب';
     if (!form.salePrice || isNaN(Number(form.salePrice))) next.salePrice = 'سعر بيع غير صحيح';
@@ -170,6 +180,17 @@ export default function ProductsScreen() {
     setErrors(next);
     if (Object.keys(next).length) return;
 
+    let finalImages = form.images;
+    if (user?.id && form.images.some((u) => !/^https?:\/\//i.test(u))) {
+      setUploading(true);
+      const result = await uploadImages(form.images, user.id, 'products');
+      setUploading(false);
+      if (result.failed > 0) {
+        showAlert('تنبيه', `فشل رفع ${result.failed} صورة. سيتم حفظ المنتج بالصور المرفوعة فقط.`);
+      }
+      finalImages = result.urls;
+    }
+
     const payload = {
       name: form.name.trim(),
       barcode: form.barcode.trim(),
@@ -179,7 +200,7 @@ export default function ProductsScreen() {
       salePrice: Number(form.salePrice),
       lowStockAlert: Number(form.lowStockAlert) || 0,
       prices: form.prices.filter((p) => p.label.trim()),
-      images: form.images,
+      images: finalImages,
       notes: form.notes.trim(),
     };
 
@@ -197,10 +218,11 @@ export default function ProductsScreen() {
   }
 
   function confirmDelete(product: Product) {
-    showAlert('حذف منتج', `هل تريد حذف "${product.name}"؟`, [
-      { text: 'إلغاء', style: 'cancel' },
-      { text: 'حذف', style: 'destructive', onPress: () => deleteProduct(product.id) },
-    ]);
+    guard({
+      title: 'حذف منتج',
+      description: `أدخل كلمة مرور المدير لحذف "${product.name}"`,
+      action: () => deleteProduct(product.id),
+    });
   }
 
   return (
@@ -273,7 +295,7 @@ export default function ProductsScreen() {
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesRow}>
                   {item.images.map((uri, idx) => (
                     <Pressable key={idx} onPress={() => setZoomImage(uri)}>
-                      <Image source={{ uri }} style={styles.imageThumb} />
+                      <Image source={{ uri }} style={styles.imageThumb} contentFit="cover" transition={200} />
                     </Pressable>
                   ))}
                 </ScrollView>
@@ -358,8 +380,13 @@ export default function ProductsScreen() {
         title={editing ? 'تعديل منتج' : 'إضافة منتج'}
         footer={
           <>
-            <Button title="إلغاء" variant="secondary" onPress={() => setModalVisible(false)} style={{ flex: 1 }} />
-            <Button title="حفظ" onPress={handleSubmit} style={{ flex: 1 }} />
+            <Button title="إلغاء" variant="secondary" onPress={() => setModalVisible(false)} style={{ flex: 1 }} disabled={uploading} />
+            <Button
+              title={uploading ? 'جاري رفع الصور...' : 'حفظ'}
+              onPress={handleSubmit}
+              style={{ flex: 1 }}
+              loading={uploading}
+            />
           </>
         }
       >
@@ -475,6 +502,10 @@ export default function ProductsScreen() {
           keyboardType="number-pad"
         />
 
+        <View style={styles.cloudHint}>
+          <MaterialCommunityIcons name="cloud-upload" size={14} color={Colors.info} />
+          <Text style={styles.cloudHintText}>الصور تُحفظ سحابياً وتظهر على جميع أجهزتك</Text>
+        </View>
         <View style={styles.subSection}>
           <Button title="إضافة صورة" icon="image-plus" variant="secondary" size="sm" onPress={pickImage} />
           <Text style={styles.subSectionTitle}>صور المنتج ({form.images.length})</Text>
@@ -483,7 +514,7 @@ export default function ProductsScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {form.images.map((uri, idx) => (
               <View key={idx} style={styles.formImageWrap}>
-                <Image source={{ uri }} style={styles.formImage} />
+                <Image source={{ uri }} style={styles.formImage} contentFit="cover" transition={200} />
                 <Pressable
                   onPress={() => setForm((p) => ({ ...p, images: p.images.filter((_, i) => i !== idx) }))}
                   style={styles.removeImageBtn}
@@ -506,7 +537,7 @@ export default function ProductsScreen() {
 
       <Modal visible={!!zoomImage} onClose={() => setZoomImage(null)} title="عرض الصورة">
         {zoomImage ? (
-          <Image source={{ uri: zoomImage }} style={styles.zoomImg} resizeMode="contain" />
+          <Image source={{ uri: zoomImage }} style={styles.zoomImg} contentFit="contain" transition={200} />
         ) : null}
       </Modal>
     </SafeAreaView>
@@ -674,5 +705,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  cloudHint: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.infoSoft,
+    padding: Spacing.sm,
+    borderRadius: Radius.sm,
+  },
+  cloudHintText: { color: Colors.info, fontSize: FontSize.xs, flex: 1 },
   zoomImg: { width: '100%', height: 400, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.md },
 });

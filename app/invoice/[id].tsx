@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -22,6 +23,7 @@ export default function InvoiceScreen() {
   const { sales, settings, deleteSale } = useStore();
   const { canEdit } = useAuth();
   const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
   const sale = sales.find((s) => s.id === id);
   const [printMenuVisible, setPrintMenuVisible] = useState(false);
 
@@ -36,17 +38,14 @@ export default function InvoiceScreen() {
 
   function handleDelete() {
     if (!sale) return;
-    showAlert('حذف الفاتورة', 'سيتم استرجاع الكميات للمخزون.', [
-      { text: 'إلغاء', style: 'cancel' },
-      {
-        text: 'حذف',
-        style: 'destructive',
-        onPress: () => {
-          deleteSale(sale.id);
-          router.back();
-        },
+    guard({
+      title: 'حذف الفاتورة',
+      description: `أدخل كلمة مرور المدير لحذف الفاتورة #${sale.invoiceNo}. سيتم استرجاع الكميات للمخزون.`,
+      action: () => {
+        deleteSale(sale.id);
+        router.back();
       },
-    ]);
+    });
   }
 
   async function handlePrint(action: PrintAction) {
@@ -251,24 +250,15 @@ const styles = StyleSheet.create({
   },
   brandWrap: { alignItems: 'center', gap: 4, paddingVertical: Spacing.sm },
   logo: {
-    width: 64,
-    height: 64,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 64, height: 64, borderRadius: Radius.full,
+    backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
   },
   brand: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.text, marginTop: 8 },
   brandTitle: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: FontWeight.semibold },
   brandSub: { fontSize: FontSize.xs, color: Colors.textSecondary },
   returnBanner: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.dangerSoft,
-    padding: Spacing.sm,
-    borderRadius: Radius.md,
-    marginTop: Spacing.md,
+    flexDirection: 'row-reverse', alignItems: 'center', gap: 6,
+    backgroundColor: Colors.dangerSoft, padding: Spacing.sm, borderRadius: Radius.md, marginTop: Spacing.md,
   },
   returnBannerText: { color: Colors.danger, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   divider: { height: 1, backgroundColor: Colors.border, marginVertical: Spacing.md },
@@ -277,38 +267,23 @@ const styles = StyleSheet.create({
   metaLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
   metaValue: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
   tableHeader: {
-    flexDirection: 'row-reverse',
-    backgroundColor: Colors.primary,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 8,
-    borderRadius: Radius.sm,
-    alignItems: 'center',
-    gap: 4,
+    flexDirection: 'row-reverse', backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.sm, paddingVertical: 8,
+    borderRadius: Radius.sm, alignItems: 'center', gap: 4,
   },
   th: { color: Colors.white, fontWeight: FontWeight.semibold, fontSize: FontSize.xs },
   tableRow: {
-    flexDirection: 'row-reverse',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 8,
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: Radius.sm,
+    flexDirection: 'row-reverse', paddingHorizontal: Spacing.sm, paddingVertical: 8,
+    alignItems: 'center', gap: 4, borderRadius: Radius.sm,
   },
   td: { color: Colors.text, fontSize: FontSize.sm },
   priceTier: { color: Colors.primary, fontSize: 10, marginTop: 2, textAlign: 'right' },
-  summaryRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-  },
+  summaryRow: { flexDirection: 'row-reverse', justifyContent: 'space-between', paddingVertical: 4 },
   summaryLabel: { color: Colors.textSecondary, fontSize: FontSize.md },
   summaryValue: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
   totalBlock: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.md,
+    backgroundColor: Colors.primary, borderRadius: Radius.md,
+    padding: Spacing.md, alignItems: 'center', marginTop: Spacing.md,
   },
   totalLabel: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.sm },
   totalValue: { color: Colors.white, fontSize: FontSize.xxxl, fontWeight: FontWeight.bold },
@@ -316,18 +291,7 @@ const styles = StyleSheet.create({
   signBox: { flex: 1, alignItems: 'center' },
   signLine: { borderTopWidth: 1, borderTopColor: Colors.borderStrong, alignSelf: 'stretch', marginVertical: Spacing.lg },
   signLabel: { color: Colors.textSecondary, fontSize: FontSize.xs },
-  thanks: {
-    textAlign: 'center',
-    color: Colors.textSecondary,
-    marginTop: Spacing.lg,
-    fontSize: FontSize.sm,
-  },
-  developer: {
-    textAlign: 'center',
-    color: Colors.primary,
-    marginTop: 4,
-    fontSize: FontSize.xs,
-    fontWeight: FontWeight.semibold,
-  },
+  thanks: { textAlign: 'center', color: Colors.textSecondary, marginTop: Spacing.lg, fontSize: FontSize.sm },
+  developer: { textAlign: 'center', color: Colors.primary, marginTop: 4, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   actions: { flexDirection: 'row-reverse', gap: Spacing.md, flexWrap: 'wrap' },
 });

@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
-import { useAlert } from '@/template';
+import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Button } from '@/components/ui/Button';
@@ -28,7 +28,7 @@ const empty: FormState = { name: '', phone: '', address: '', debt: '0' };
 export default function CustomersScreen() {
   const router = useRouter();
   const { customers, addCustomer, updateCustomer, deleteCustomer, settings } = useStore();
-  const { showAlert } = useAlert();
+  const { guard } = useAdminGuard();
 
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
@@ -54,10 +54,16 @@ export default function CustomersScreen() {
   }
 
   function openEdit(c: Customer) {
-    setEditing(c);
-    setForm({ name: c.name, phone: c.phone, address: c.address, debt: String(c.debt) });
-    setErrors({});
-    setModalVisible(true);
+    guard({
+      title: 'تعديل عميل',
+      description: `أدخل كلمة مرور المدير لتعديل "${c.name}"`,
+      action: () => {
+        setEditing(c);
+        setForm({ name: c.name, phone: c.phone, address: c.address, debt: String(c.debt) });
+        setErrors({});
+        setModalVisible(true);
+      },
+    });
   }
 
   function handleSubmit() {
@@ -77,10 +83,11 @@ export default function CustomersScreen() {
   }
 
   function confirmDelete(c: Customer) {
-    showAlert('حذف عميل', `هل تريد حذف "${c.name}"؟`, [
-      { text: 'إلغاء', style: 'cancel' },
-      { text: 'حذف', style: 'destructive', onPress: () => deleteCustomer(c.id) },
-    ]);
+    guard({
+      title: 'حذف عميل',
+      description: `أدخل كلمة مرور المدير لحذف "${c.name}"`,
+      action: () => deleteCustomer(c.id),
+    });
   }
 
   return (

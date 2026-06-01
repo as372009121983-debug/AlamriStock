@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { AppUser, ROLE_COLORS, ROLE_DESCRIPTIONS, ROLE_LABELS, UserRole } from '@/constants/types';
+import { AppUser, ROLE_COLORS, ROLE_DESCRIPTIONS, ROLE_LABELS, STATUS_COLORS, STATUS_LABELS, UserRole, UserStatus } from '@/constants/types';
 import { formatDateTime } from '@/services/format';
 
 type FormState = {
@@ -20,18 +20,20 @@ type FormState = {
   name: string;
   role: UserRole;
   active: boolean;
+  status: UserStatus;
 };
-const empty: FormState = { email: '', password: '', name: '', role: 'sales', active: true };
+const empty: FormState = { email: '', password: '', name: '', role: 'sales', active: true, status: 'pending' };
 
 const ROLE_OPTIONS: UserRole[] = ['manager', 'head', 'sales', 'warehouse'];
 
 export default function UsersScreen() {
-  const { users, addUser, updateUser, deleteUser, user, isOwner } = useAuth();
+  const { users, addUser, updateUser, deleteUser, approveUser, rejectUser, user, isOwner, pendingUsersCount } = useAuth();
   const { showAlert } = useAlert();
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<AppUser | null>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState<'all' | UserStatus>('all');
 
   if (!isOwner) {
     return (
@@ -42,14 +44,16 @@ export default function UsersScreen() {
     );
   }
 
+  const filteredUsers = filter === 'all' ? users : users.filter((u) => u.status === filter);
+
   function openCreate() {
     setEditing(null);
-    setForm(empty);
+    setForm({ ...empty, status: 'approved' });
     setModalVisible(true);
   }
   function openEdit(u: AppUser) {
     setEditing(u);
-    setForm({ email: u.email, password: u.password, name: u.name, role: u.role, active: u.active });
+    setForm({ email: u.email, password: u.password, name: u.name, role: u.role, active: u.active, status: u.status });
     setModalVisible(true);
   }
   async function handleSubmit() {
@@ -74,6 +78,9 @@ export default function UsersScreen() {
         return;
       }
       setModalVisible(false);
+      if (form.status === 'pending') {
+        showAlert('تم الإرسال', 'تم إرسال طلب الانضمام، يحتاج إلى موافقتك من صفحة طلبات الانضمام');
+      }
     }
   }
   function confirmDelete(u: AppUser) {
@@ -92,12 +99,22 @@ export default function UsersScreen() {
   async function toggleActive(u: AppUser) {
     await updateUser(u.id, { active: !u.active });
   }
+  async function handleApprove(u: AppUser) {
+    const res = await approveUser(u.id);
+    if (res.ok) showAlert('تم القبول', `تم قبول ${u.name}`);
+    else showAlert('خطأ', res.message || '');
+  }
+  async function handleReject(u: AppUser) {
+    const res = await rejectUser(u.id);
+    if (res.ok) showAlert('تم الرفض', `تم رفض طلب ${u.name}`);
+    else showAlert('خطأ', res.message || '');
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Header
         title="المستخدمون"
-        subtitle={`${users.length} مستخدم فرعي`}
+        subtitle={`${users.length} مستخدم${pendingUsersCount > 0 ? ` • ${pendingUsersCount} بانتظار` : ''}`}
         right={
           <Pressable onPress={openCreate} hitSlop={8} style={styles.headerBtn}>
             <MaterialCommunityIcons name="account-plus" size={20} color={Colors.white} />
@@ -118,24 +135,26 @@ export default function UsersScreen() {
         </View>
       </View>
 
-      <View style={styles.infoBanner}>
-        <MaterialCommunityIcons name="information-outline" size={16} color={Colors.info} />
-        <Text style={styles.infoBannerText}>
-          المستخدمون الفرعيون مسجلون في السحابة. لتمكين تسجيل الدخول الفعلي لهم من أجهزة أخرى، يلزم إنشاء حساب لهم بالبريد المسجل
-        </Text>
+      <View style={styles.tabsRow}>
+        <FilterChip label={`الكل (${users.length})`} active={filter === 'all'} onPress={() => setFilter('all')} />
+        <FilterChip label={`بانتظار (${users.filter((u) => u.status === 'pending').length})`} active={filter === 'pending'} onPress={() => setFilter('pending')} />
+        <FilterChip label={`مقبول (${users.filter((u) => u.status === 'approved').length})`} active={filter === 'approved'} onPress={() => setFilter('approved')} />
+        <FilterChip label={`مرفوض (${users.filter((u) => u.status === 'rejected').length})`} active={filter === 'rejected'} onPress={() => setFilter('rejected')} />
       </View>
 
       <FlatList
-        data={users}
+        data={filteredUsers}
         keyExtractor={(u) => u.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
-          <EmptyState icon="account-multiple" title="لا يوجد مستخدمون فرعيون" description="ابدأ بإضافة مستخدم جديد" />
+          <EmptyState icon="account-multiple" title="لا يوجد مستخدمون" description="ابدأ بإضافة مستخدم جديد" />
         }
         renderItem={({ item }) => {
           const colors = ROLE_COLORS[item.role];
+          const statusColors = STATUS_COLORS[item.status];
+          const isPending = item.status === 'pending';
           return (
-            <View style={styles.card}>
+            <View style={[styles.card, isPending && { borderColor: Colors.warning, borderWidth: 1.5 }]}>
               <View style={{ flexDirection: 'row-reverse', gap: 6 }}>
                 <Pressable onPress={() => confirmDelete(item)} hitSlop={8} style={styles.actBtn}>
                   <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
@@ -158,6 +177,9 @@ export default function UsersScreen() {
                   <View style={[styles.tag, { backgroundColor: colors.bg }]}>
                     <Text style={[styles.tagText, { color: colors.fg }]}>{ROLE_LABELS[item.role]}</Text>
                   </View>
+                  <View style={[styles.tag, { backgroundColor: statusColors.bg }]}>
+                    <Text style={[styles.tagText, { color: statusColors.fg }]}>{STATUS_LABELS[item.status]}</Text>
+                  </View>
                   {item.active ? (
                     <View style={[styles.tag, { backgroundColor: Colors.successSoft }]}>
                       <Text style={[styles.tagText, { color: Colors.success }]}>نشط</Text>
@@ -169,6 +191,12 @@ export default function UsersScreen() {
                   )}
                 </View>
                 <Text style={styles.meta}>أُضيف: {formatDateTime(item.createdAt)}</Text>
+                {isPending ? (
+                  <View style={styles.pendingActions}>
+                    <Button title="قبول" icon="check" size="sm" onPress={() => handleApprove(item)} />
+                    <Button title="رفض" icon="close" size="sm" variant="danger" onPress={() => handleReject(item)} />
+                  </View>
+                ) : null}
               </View>
               <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
                 <Text style={[styles.avatarText, { color: colors.fg }]}>{(item.name || '?').slice(0, 1)}</Text>
@@ -235,6 +263,29 @@ export default function UsersScreen() {
           })}
         </View>
 
+        <Text style={styles.fieldLabel}>حالة الحساب</Text>
+        <View style={{ flexDirection: 'row-reverse', gap: Spacing.sm }}>
+          {(['pending', 'approved', 'rejected'] as UserStatus[]).map((s) => {
+            const a = form.status === s;
+            const sc = STATUS_COLORS[s];
+            return (
+              <Pressable
+                key={s}
+                onPress={() => setForm((p) => ({ ...p, status: s }))}
+                style={({ pressed }) => [
+                  styles.statusChip,
+                  { backgroundColor: a ? sc.fg : sc.bg },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text style={[styles.statusChipText, { color: a ? Colors.white : sc.fg }]}>
+                  {STATUS_LABELS[s]}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         <Pressable onPress={() => setForm((p) => ({ ...p, active: !p.active }))} style={styles.checkRow}>
           <View style={[styles.check, form.active && styles.checkActive]}>
             {form.active ? <MaterialCommunityIcons name="check" size={14} color={Colors.white} /> : null}
@@ -246,44 +297,34 @@ export default function UsersScreen() {
   );
 }
 
+function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && { opacity: 0.85 }]}
+    >
+      <Text style={[styles.filterChipText, active && { color: Colors.white }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   headerBtn: { backgroundColor: Colors.primary, width: 40, height: 40, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
   ownerCard: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    margin: Spacing.lg,
-    marginBottom: 0,
-    padding: Spacing.lg,
-    borderRadius: Radius.lg,
-    borderWidth: 2,
-    borderColor: Colors.primarySoft,
-    ...Shadow.sm,
+    flexDirection: 'row-reverse', alignItems: 'center', backgroundColor: Colors.surface,
+    margin: Spacing.lg, marginBottom: 0, padding: Spacing.lg, borderRadius: Radius.lg,
+    borderWidth: 2, borderColor: Colors.primarySoft, ...Shadow.sm,
   },
-  infoBanner: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.infoSoft,
-    margin: Spacing.lg,
-    marginTop: Spacing.md,
-    marginBottom: 0,
-    padding: Spacing.md,
-    borderRadius: Radius.md,
-  },
-  infoBannerText: { flex: 1, color: Colors.info, fontSize: FontSize.xs, textAlign: 'right' },
-  list: { padding: Spacing.lg, gap: Spacing.md },
+  tabsRow: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  filterChip: { paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.full, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
+  filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  filterChipText: { color: Colors.text, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
   card: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: Spacing.md,
-    flexDirection: 'row-reverse',
-    alignItems: 'flex-start',
-    ...Shadow.sm,
+    backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg,
+    borderWidth: 1, borderColor: Colors.border, marginBottom: Spacing.md,
+    flexDirection: 'row-reverse', alignItems: 'flex-start', ...Shadow.sm,
   },
   actBtn: { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   avatar: { width: 48, height: 48, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
@@ -294,6 +335,7 @@ const styles = StyleSheet.create({
   tag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.full },
   tagText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   meta: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 6 },
+  pendingActions: { flexDirection: 'row-reverse', gap: Spacing.sm, marginTop: Spacing.sm },
   fieldLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right', marginTop: Spacing.sm },
   roleOption: { flexDirection: 'row-reverse', alignItems: 'center', padding: Spacing.md, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.md, borderWidth: 1.5, borderColor: 'transparent' },
   roleOptionActive: { backgroundColor: Colors.primaryTint, borderColor: Colors.primary },
@@ -301,6 +343,8 @@ const styles = StyleSheet.create({
   roleDesc: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 2, textAlign: 'right' },
   dotTag: { width: 14, height: 14, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 6, height: 6, borderRadius: Radius.full },
+  statusChip: { flex: 1, paddingHorizontal: Spacing.md, paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
+  statusChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold },
   checkRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginTop: Spacing.lg },
   check: { width: 22, height: 22, borderRadius: Radius.sm, borderWidth: 2, borderColor: Colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
   checkActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },

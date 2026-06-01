@@ -77,7 +77,25 @@ export default function WarehousesScreen() {
   }
   async function handlePrint(action: PrintAction) {
     try {
-      const html = buildInventoryHtml(products, stocks, warehouses, printAll ? null : printForId, settings);
+      const target = printAll ? warehouses : warehouses.filter((w) => w.id === printForId);
+      const rows: { name: string; barcode: string; qty: number; purchasePrice: number; salePrice: number; purchaseValue: number; saleValue: number }[] = [];
+      let totalQty = 0;
+      let totalPurchaseValue = 0;
+      let totalSaleValue = 0;
+      for (const p of products) {
+        const qty = target.reduce((sum, w) => {
+          const entry = stocks.find((s) => s.productId === p.id && s.warehouseId === w.id);
+          return sum + (entry?.quantity || 0);
+        }, 0);
+        if (qty === 0) continue;
+        const pv = qty * p.purchasePrice;
+        const sv = qty * p.salePrice;
+        rows.push({ name: p.name, barcode: p.barcode || '', qty, purchasePrice: p.purchasePrice, salePrice: p.salePrice, purchaseValue: pv, saleValue: sv });
+        totalQty += qty;
+        totalPurchaseValue += pv;
+        totalSaleValue += sv;
+      }
+      const html = buildInventoryHtml({ rows, totalQty, totalPurchaseValue, totalSaleValue, fromDate: null, toDate: null }, settings);
       const name = printAll ? 'inventory-all' : `inventory-${printForId}`;
       await performPrint(html, name, action);
     } catch {

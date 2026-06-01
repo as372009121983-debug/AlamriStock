@@ -13,7 +13,9 @@ import { loadData, saveData, StorageKeys, clearAll as clearStorage } from '@/ser
 import {
   ActivityLog,
   ActivityType,
+  AppNotification,
   Customer,
+  CustomerPayment,
   Expense,
   Product,
   Purchase,
@@ -29,6 +31,8 @@ import {
   Transfer,
   TransferItem,
   Warehouse,
+  Worker,
+  WorkerPayment,
 } from '@/constants/types';
 import { useAuth } from '@/hooks/useAuth';
 import { AppDataBlob, pullAppData, pushAppData } from '@/services/cloud';
@@ -48,6 +52,10 @@ export type StoreContextType = {
   saleReturns: SaleReturn[];
   purchaseReturns: PurchaseReturn[];
   expenses: Expense[];
+  customerPayments: CustomerPayment[];
+  workers: Worker[];
+  workerPayments: WorkerPayment[];
+  notifications: AppNotification[];
   activityLog: ActivityLog[];
   settings: Settings;
   invoiceCounter: number;
@@ -55,6 +63,9 @@ export type StoreContextType = {
   transferCounter: number;
   saleReturnCounter: number;
   purchaseReturnCounter: number;
+  customerPaymentCounter: number;
+  workerPaymentCounter: number;
+  unreadNotifications: number;
   getStock: (productId: string, warehouseId: string) => number;
   getTotalStock: (productId: string) => number;
   defaultMainWarehouseId: string | null;
@@ -62,7 +73,7 @@ export type StoreContextType = {
   addProduct: (data: Omit<Product, 'id' | 'createdAt' | 'quantity'>, warehouseId: string, initialQty: number) => { ok: boolean; message?: string };
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
-  addCustomer: (data: Omit<Customer, 'id' | 'createdAt' | 'debt'> & { debt?: number }) => void;
+  addCustomer: (data: Omit<Customer, 'id' | 'createdAt' | 'debt'> & { debt?: number }) => Customer;
   updateCustomer: (id: string, data: Partial<Customer>) => void;
   deleteCustomer: (id: string) => void;
   addSupplier: (data: Omit<Supplier, 'id' | 'createdAt'>) => void;
@@ -84,6 +95,17 @@ export type StoreContextType = {
   addExpense: (data: Omit<Expense, 'id' | 'date' | 'userId' | 'userName'> & { date?: number }) => void;
   updateExpense: (id: string, data: Partial<Expense>) => void;
   deleteExpense: (id: string) => void;
+  addCustomerPayment: (data: { customerId: string; customerName: string; amount: number; date?: number; notes?: string }) => { payment: CustomerPayment | null; error?: string };
+  deleteCustomerPayment: (id: string) => void;
+  addWorker: (data: Omit<Worker, 'id' | 'createdAt'>) => Worker;
+  updateWorker: (id: string, data: Partial<Worker>) => void;
+  deleteWorker: (id: string) => { ok: boolean; message?: string };
+  addWorkerPayment: (data: { workerId: string; amount: number; date?: number; notes?: string }) => { payment: WorkerPayment | null; error?: string };
+  deleteWorkerPayment: (id: string) => void;
+  addNotification: (notif: Omit<AppNotification, 'id' | 'date' | 'read'>) => void;
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
+  deleteNotification: (id: string) => void;
   updateSettings: (data: Partial<Settings>) => void;
   resetAll: () => Promise<void>;
 };
@@ -100,6 +122,7 @@ const defaultSettings: Settings = {
   address: '',
   taxNumber: '',
   invoiceFooter: 'شكراً لتعاملكم معنا',
+  adminPassword: '0',
 };
 
 const ACTIVITY_LIMIT = 1000;
@@ -121,6 +144,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [saleReturns, setSaleReturns] = useState<SaleReturn[]>([]);
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
+  const [workers, setWorkers] = useState<Worker[]>([]);
+  const [workerPayments, setWorkerPayments] = useState<WorkerPayment[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [invoiceCounter, setInvoiceCounter] = useState<number>(1000);
@@ -128,6 +155,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [transferCounter, setTransferCounter] = useState<number>(1000);
   const [saleReturnCounter, setSaleReturnCounter] = useState<number>(1000);
   const [purchaseReturnCounter, setPurchaseReturnCounter] = useState<number>(1000);
+  const [customerPaymentCounter, setCustomerPaymentCounter] = useState<number>(1000);
+  const [workerPaymentCounter, setWorkerPaymentCounter] = useState<number>(1000);
 
   const lastCloudUpdateRef = useRef<string | null>(null);
   const previousUserIdRef = useRef<string | null>(null);
@@ -135,7 +164,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Load local cache on mount
   useEffect(() => {
     (async () => {
-      const [p, c, s, sa, pu, wh, st, tr, sr, pr, ex, al, settingsData, ic, pc, tc, src, prc] = await Promise.all([
+      const [
+        p, c, s, sa, pu, wh, st, tr, sr, pr, ex,
+        cp, wk, wp, notif, al, settingsData,
+        ic, pc, tc, src, prc, cpc, wpc,
+      ] = await Promise.all([
         loadData<Product[]>(StorageKeys.products, []),
         loadData<Customer[]>(StorageKeys.customers, []),
         loadData<Supplier[]>(StorageKeys.suppliers, []),
@@ -147,6 +180,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         loadData<SaleReturn[]>(StorageKeys.saleReturns, []),
         loadData<PurchaseReturn[]>(StorageKeys.purchaseReturns, []),
         loadData<Expense[]>(StorageKeys.expenses, []),
+        loadData<CustomerPayment[]>(StorageKeys.customerPayments, []),
+        loadData<Worker[]>(StorageKeys.workers, []),
+        loadData<WorkerPayment[]>(StorageKeys.workerPayments, []),
+        loadData<AppNotification[]>(StorageKeys.notifications, []),
         loadData<ActivityLog[]>(StorageKeys.activityLog, []),
         loadData<Settings>(StorageKeys.settings, defaultSettings),
         loadData<number>(StorageKeys.invoiceCounter, 1000),
@@ -154,6 +191,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         loadData<number>(StorageKeys.transferCounter, 1000),
         loadData<number>(StorageKeys.saleReturnCounter, 1000),
         loadData<number>(StorageKeys.purchaseReturnCounter, 1000),
+        loadData<number>(StorageKeys.customerPaymentCounter, 1000),
+        loadData<number>(StorageKeys.workerPaymentCounter, 1000),
       ]);
 
       let warehousesData = wh;
@@ -205,6 +244,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSaleReturns(sr);
       setPurchaseReturns(pr);
       setExpenses(ex);
+      setCustomerPayments(cp);
+      setWorkers(wk);
+      setWorkerPayments(wp);
+      setNotifications(notif);
       setActivityLog(al);
       setSettings({ ...defaultSettings, ...settingsData });
       setInvoiceCounter(ic);
@@ -212,6 +255,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setTransferCounter(tc);
       setSaleReturnCounter(src);
       setPurchaseReturnCounter(prc);
+      setCustomerPaymentCounter(cpc);
+      setWorkerPaymentCounter(wpc);
       setReady(true);
     })();
   }, []);
@@ -228,6 +273,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) saveData(StorageKeys.saleReturns, saleReturns); }, [saleReturns, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.purchaseReturns, purchaseReturns); }, [purchaseReturns, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.expenses, expenses); }, [expenses, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.customerPayments, customerPayments); }, [customerPayments, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.workers, workers); }, [workers, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.workerPayments, workerPayments); }, [workerPayments, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.notifications, notifications); }, [notifications, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.activityLog, activityLog); }, [activityLog, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.settings, settings); }, [settings, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.invoiceCounter, invoiceCounter); }, [invoiceCounter, ready]);
@@ -235,12 +284,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) saveData(StorageKeys.transferCounter, transferCounter); }, [transferCounter, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.saleReturnCounter, saleReturnCounter); }, [saleReturnCounter, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.purchaseReturnCounter, purchaseReturnCounter); }, [purchaseReturnCounter, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.customerPaymentCounter, customerPaymentCounter); }, [customerPaymentCounter, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.workerPaymentCounter, workerPaymentCounter); }, [workerPaymentCounter, ready]);
 
   function collectBlob(): AppDataBlob {
     return {
       products, customers, suppliers, sales, purchases, warehouses, stocks,
-      transfers, saleReturns, purchaseReturns, expenses, activityLog, settings,
-      invoiceCounter, purchaseCounter, transferCounter, saleReturnCounter, purchaseReturnCounter,
+      transfers, saleReturns, purchaseReturns, expenses,
+      customerPayments, workers, workerPayments, notifications,
+      activityLog, settings,
+      invoiceCounter, purchaseCounter, transferCounter,
+      saleReturnCounter, purchaseReturnCounter,
+      customerPaymentCounter, workerPaymentCounter,
     };
   }
 
@@ -256,6 +311,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (Array.isArray(blob.saleReturns)) setSaleReturns(blob.saleReturns);
     if (Array.isArray(blob.purchaseReturns)) setPurchaseReturns(blob.purchaseReturns);
     if (Array.isArray(blob.expenses)) setExpenses(blob.expenses);
+    if (Array.isArray(blob.customerPayments)) setCustomerPayments(blob.customerPayments);
+    if (Array.isArray(blob.workers)) setWorkers(blob.workers);
+    if (Array.isArray(blob.workerPayments)) setWorkerPayments(blob.workerPayments);
+    if (Array.isArray(blob.notifications)) setNotifications(blob.notifications);
     if (Array.isArray(blob.activityLog)) setActivityLog(blob.activityLog);
     if (blob.settings) setSettings({ ...defaultSettings, ...blob.settings });
     if (typeof blob.invoiceCounter === 'number') setInvoiceCounter(blob.invoiceCounter);
@@ -263,6 +322,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (typeof blob.transferCounter === 'number') setTransferCounter(blob.transferCounter);
     if (typeof blob.saleReturnCounter === 'number') setSaleReturnCounter(blob.saleReturnCounter);
     if (typeof blob.purchaseReturnCounter === 'number') setPurchaseReturnCounter(blob.purchaseReturnCounter);
+    if (typeof blob.customerPaymentCounter === 'number') setCustomerPaymentCounter(blob.customerPaymentCounter);
+    if (typeof blob.workerPaymentCounter === 'number') setWorkerPaymentCounter(blob.workerPaymentCounter);
   }
 
   // On user change: pull from cloud
@@ -273,7 +334,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     previousUserIdRef.current = currentUserId;
 
     if (!currentUserId) {
-      // User logged out - clear state if had user before
       if (previousUserId) {
         setHasInitialSync(false);
         lastCloudUpdateRef.current = null;
@@ -297,6 +357,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSaleReturns([]);
         setPurchaseReturns([]);
         setExpenses([]);
+        setCustomerPayments([]);
+        setWorkers([]);
+        setWorkerPayments([]);
+        setNotifications([]);
         setActivityLog([]);
         setSettings(defaultSettings);
         setInvoiceCounter(1000);
@@ -304,6 +368,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setTransferCounter(1000);
         setSaleReturnCounter(1000);
         setPurchaseReturnCounter(1000);
+        setCustomerPaymentCounter(1000);
+        setWorkerPaymentCounter(1000);
       }
       return;
     }
@@ -317,7 +383,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         lastCloudUpdateRef.current = result.updatedAt || null;
         setLastCloudSyncAt(Date.now());
       } else if (result.ok && !result.data) {
-        // No cloud data yet - push current as initial backup
         const blob = collectBlob();
         const r = await pushAppData(currentUserId, blob);
         if (r.ok) {
@@ -346,7 +411,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }, 2500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [products, customers, suppliers, sales, purchases, warehouses, stocks, transfers, saleReturns, purchaseReturns, expenses, settings, invoiceCounter, purchaseCounter, transferCounter, saleReturnCounter, purchaseReturnCounter, hasInitialSync, ready, user?.id]);
+  }, [
+    products, customers, suppliers, sales, purchases, warehouses, stocks,
+    transfers, saleReturns, purchaseReturns, expenses,
+    customerPayments, workers, workerPayments, notifications,
+    settings,
+    invoiceCounter, purchaseCounter, transferCounter,
+    saleReturnCounter, purchaseReturnCounter,
+    customerPaymentCounter, workerPaymentCounter,
+    hasInitialSync, ready, user?.id,
+  ]);
 
   // Periodic poll for remote changes
   useEffect(() => {
@@ -453,6 +527,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const customer: Customer = { id: generateId(), createdAt: Date.now(), debt: data.debt ?? 0, name: data.name, phone: data.phone, address: data.address };
     setCustomers((prev) => [customer, ...prev]);
     logActivity('customer_add', `إضافة عميل: ${customer.name}`, { refId: customer.id });
+    return customer;
   }, [logActivity]);
 
   const updateCustomer = useCallback((id: string, data: Partial<Customer>) => {
@@ -741,6 +816,131 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (target) logActivity('expense_delete', `حذف مصروف ${target.category}`, { refId: id });
   }, [expenses, logActivity]);
 
+  // Customer Payments
+  const addCustomerPayment: StoreContextType['addCustomerPayment'] = useCallback((data) => {
+    if (!data.customerId) return { payment: null, error: 'يجب اختيار العميل' };
+    if (!data.amount || data.amount <= 0) return { payment: null, error: 'المبلغ غير صحيح' };
+    const newCounter = customerPaymentCounter + 1;
+    const payment: CustomerPayment = {
+      id: generateId(),
+      customerId: data.customerId,
+      customerName: data.customerName,
+      amount: data.amount,
+      date: data.date || Date.now(),
+      notes: data.notes || '',
+      userId: user?.id || 'system',
+      userName: user?.name || 'النظام',
+    };
+    setCustomerPayments((prev) => [payment, ...prev]);
+    setCustomerPaymentCounter(newCounter);
+    setCustomers((prev) => prev.map((c) =>
+      c.id === data.customerId ? { ...c, debt: Math.max(0, c.debt - data.amount) } : c
+    ));
+    logActivity('customer_payment', `دفعة من ${data.customerName} بقيمة ${data.amount}`, { amount: data.amount, refId: payment.id });
+    return { payment };
+  }, [customerPaymentCounter, user, logActivity]);
+
+  const deleteCustomerPayment = useCallback((id: string) => {
+    setCustomerPayments((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) {
+        setCustomers((cs) => cs.map((c) =>
+          c.id === target.customerId ? { ...c, debt: c.debt + target.amount } : c
+        ));
+        logActivity('customer_payment_delete', `حذف دفعة عميل ${target.customerName}`, { amount: target.amount, refId: id });
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  }, [logActivity]);
+
+  // Workers
+  const addWorker = useCallback<StoreContextType['addWorker']>((data) => {
+    const worker: Worker = {
+      ...data,
+      id: generateId(),
+      createdAt: Date.now(),
+    };
+    setWorkers((prev) => [worker, ...prev]);
+    logActivity('worker_add', `إضافة عامل: ${worker.name}`, { refId: worker.id });
+    return worker;
+  }, [logActivity]);
+
+  const updateWorker = useCallback((id: string, data: Partial<Worker>) => {
+    setWorkers((prev) => prev.map((w) => (w.id === id ? { ...w, ...data } : w)));
+    const t = workers.find((w) => w.id === id);
+    logActivity('worker_edit', `تعديل عامل: ${t?.name || id}`, { refId: id });
+  }, [workers, logActivity]);
+
+  const deleteWorker = useCallback((id: string) => {
+    const w = workers.find((x) => x.id === id);
+    if (!w) return { ok: false, message: 'العامل غير موجود' };
+    setWorkers((prev) => prev.filter((x) => x.id !== id));
+    setWorkerPayments((prev) => prev.filter((p) => p.workerId !== id));
+    logActivity('worker_delete', `حذف عامل: ${w.name}`, { refId: id });
+    return { ok: true };
+  }, [workers, logActivity]);
+
+  const addWorkerPayment: StoreContextType['addWorkerPayment'] = useCallback((data) => {
+    const w = workers.find((x) => x.id === data.workerId);
+    if (!w) return { payment: null, error: 'العامل غير موجود' };
+    if (!data.amount || data.amount <= 0) return { payment: null, error: 'المبلغ غير صحيح' };
+    const totalPaid = workerPayments
+      .filter((p) => p.workerId === data.workerId)
+      .reduce((sum, p) => sum + p.amount, 0);
+    if (w.maxAllowed > 0 && totalPaid + data.amount > w.maxAllowed) {
+      const remaining = Math.max(0, w.maxAllowed - totalPaid);
+      return { payment: null, error: `المبلغ يتجاوز الحد المسموح. المتبقي: ${remaining}` };
+    }
+    const newCounter = workerPaymentCounter + 1;
+    const payment: WorkerPayment = {
+      id: generateId(),
+      workerId: data.workerId,
+      workerName: w.name,
+      amount: data.amount,
+      date: data.date || Date.now(),
+      notes: data.notes || '',
+      userId: user?.id || 'system',
+      userName: user?.name || 'النظام',
+    };
+    setWorkerPayments((prev) => [payment, ...prev]);
+    setWorkerPaymentCounter(newCounter);
+    logActivity('worker_payment', `قبض ${w.name} بقيمة ${data.amount}`, { amount: data.amount, refId: payment.id });
+    return { payment };
+  }, [workers, workerPayments, workerPaymentCounter, user, logActivity]);
+
+  const deleteWorkerPayment = useCallback((id: string) => {
+    setWorkerPayments((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) {
+        logActivity('worker_payment_delete', `حذف قبض عامل ${target.workerName}`, { amount: target.amount, refId: id });
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  }, [logActivity]);
+
+  // Notifications
+  const addNotification = useCallback<StoreContextType['addNotification']>((notif) => {
+    const entry: AppNotification = {
+      id: generateId(),
+      ...notif,
+      read: false,
+      date: Date.now(),
+    };
+    setNotifications((prev) => [entry, ...prev].slice(0, 200));
+  }, []);
+
+  const markNotificationRead = useCallback((id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  }, []);
+
+  const markAllNotificationsRead = useCallback(() => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  }, []);
+
+  const deleteNotification = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
   const updateSettings = useCallback((data: Partial<Settings>) => {
     setSettings((prev) => ({ ...prev, ...data }));
     logActivity('settings_update', 'تحديث الإعدادات');
@@ -750,16 +950,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await clearStorage();
     setProducts([]); setCustomers([]); setSuppliers([]); setSales([]); setPurchases([]);
     setWarehouses([]); setStocks([]); setTransfers([]); setSaleReturns([]); setPurchaseReturns([]);
-    setExpenses([]); setActivityLog([]); setSettings(defaultSettings);
+    setExpenses([]); setCustomerPayments([]); setWorkers([]); setWorkerPayments([]);
+    setNotifications([]); setActivityLog([]); setSettings(defaultSettings);
     setInvoiceCounter(1000); setPurchaseCounter(1000); setTransferCounter(1000);
     setSaleReturnCounter(1000); setPurchaseReturnCounter(1000);
+    setCustomerPaymentCounter(1000); setWorkerPaymentCounter(1000);
   }, []);
+
+  const unreadNotifications = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  );
 
   return (
     <StoreContext.Provider value={{
-      ready, syncing, lastCloudSyncAt, products, customers, suppliers, sales, purchases,
-      warehouses, stocks, transfers, saleReturns, purchaseReturns, expenses, activityLog, settings,
-      invoiceCounter, purchaseCounter, transferCounter, saleReturnCounter, purchaseReturnCounter,
+      ready, syncing, lastCloudSyncAt,
+      products, customers, suppliers, sales, purchases,
+      warehouses, stocks, transfers, saleReturns, purchaseReturns, expenses,
+      customerPayments, workers, workerPayments, notifications,
+      activityLog, settings,
+      invoiceCounter, purchaseCounter, transferCounter,
+      saleReturnCounter, purchaseReturnCounter,
+      customerPaymentCounter, workerPaymentCounter,
+      unreadNotifications,
       getStock, getTotalStock, defaultMainWarehouseId, syncNow,
       addProduct, updateProduct, deleteProduct,
       addCustomer, updateCustomer, deleteCustomer,
@@ -768,7 +981,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createSale, deleteSale, createPurchase, deletePurchase,
       createTransfer, deleteTransfer,
       createSaleReturn, deleteSaleReturn, createPurchaseReturn, deletePurchaseReturn,
-      addExpense, updateExpense, deleteExpense, updateSettings, resetAll,
+      addExpense, updateExpense, deleteExpense,
+      addCustomerPayment, deleteCustomerPayment,
+      addWorker, updateWorker, deleteWorker,
+      addWorkerPayment, deleteWorkerPayment,
+      addNotification, markNotificationRead, markAllNotificationsRead, deleteNotification,
+      updateSettings, resetAll,
     }}>
       {children}
     </StoreContext.Provider>

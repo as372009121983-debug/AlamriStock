@@ -14,7 +14,9 @@ import {
   Product,
   Warehouse,
   StockEntry,
-  Expense,
+  CustomerPayment,
+  WorkerPayment,
+  Worker,
 } from '@/constants/types';
 
 const ARABIC_FONT_CSS = `
@@ -51,7 +53,7 @@ const ARABIC_FONT_CSS = `
   tbody td { padding: 8px; border: 1px solid #E2E8F0; text-align: right; }
   tbody tr:nth-child(even) { background: #F8FAFC; }
   .totals { margin-top: 12px; display:flex; justify-content: flex-start; }
-  .totals-card { width: 280px; background:#F0FDFA; border:1px solid #99F6E4; border-radius: 10px; padding: 12px; }
+  .totals-card { width: 320px; background:#F0FDFA; border:1px solid #99F6E4; border-radius: 10px; padding: 12px; }
   .totals-row { display:flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
   .totals-final {
     margin-top: 6px; padding-top: 8px; border-top: 2px dashed #0D9488;
@@ -63,7 +65,18 @@ const ARABIC_FONT_CSS = `
   .footer { margin-top: 24px; text-align:center; color:#64748B; font-size: 11px; border-top:1px dashed #CBD5E1; padding-top: 8px; }
   .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size: 11px; }
   .pill-r { background: #FEE2E2; color:#B91C1C; }
+  .pill-g { background: #D1FAE5; color:#065F46; }
   .num { white-space: nowrap; }
+  .stat-grid { display:grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+  .stat-card { background:#F8FAFC; border:1px solid #E2E8F0; border-radius:10px; padding:10px; }
+  .stat-label { font-size: 11px; color:#64748B; }
+  .stat-value { font-size: 18px; font-weight: 800; color:#0F172A; margin-top: 4px; }
+  .pos { color: #059669; }
+  .neg { color: #DC2626; }
+  .totals-section-title { font-size: 14px; font-weight: 800; color:#0F766E; margin: 6px 0 4px; }
+  .summary-block { background: linear-gradient(135deg,#0F766E,#14B8A6); color:#fff; padding: 14px; border-radius: 12px; margin-top: 12px; }
+  .summary-block .lbl { font-size: 12px; opacity: 0.85; }
+  .summary-block .val { font-size: 22px; font-weight: 800; margin-top: 4px; }
 `;
 
 function brandHeader(settings: Settings): string {
@@ -336,72 +349,6 @@ export function buildTransferHtml(t: Transfer, settings: Settings): string {
   return pageWrap(body);
 }
 
-// ========== Inventory Print ==========
-export function buildInventoryHtml(
-  products: Product[],
-  stocks: StockEntry[],
-  warehouses: Warehouse[],
-  warehouseFilter: string | null,
-  settings: Settings
-): string {
-  const filteredWarehouses = warehouseFilter ? warehouses.filter((w) => w.id === warehouseFilter) : warehouses;
-  const rows = products.flatMap((p) => {
-    return filteredWarehouses
-      .map((w) => {
-        const entry = stocks.find((s) => s.productId === p.id && s.warehouseId === w.id);
-        const qty = entry?.quantity || 0;
-        if (warehouseFilter && qty === 0) return null;
-        const value = qty * p.purchasePrice;
-        return `
-          <tr>
-            <td>${escapeHtml(p.name)}</td>
-            <td>${escapeHtml(p.barcode || '—')}</td>
-            <td>${escapeHtml(w.name)}</td>
-            <td>${escapeHtml(w.type === 'main' ? 'مخزن رئيسي' : 'معرض')}</td>
-            <td class="num">${formatNumber(qty)}</td>
-            <td class="num">${formatCurrency(p.purchasePrice, settings.currency)}</td>
-            <td class="num">${formatCurrency(value, settings.currency)}</td>
-          </tr>
-        `;
-      })
-      .filter(Boolean);
-  }).join('');
-  const total = products.reduce((sum, p) => {
-    return sum + filteredWarehouses.reduce((s2, w) => {
-      const entry = stocks.find((st) => st.productId === p.id && st.warehouseId === w.id);
-      return s2 + (entry?.quantity || 0) * p.purchasePrice;
-    }, 0);
-  }, 0);
-  const totalQty = products.reduce((sum, p) => {
-    return sum + filteredWarehouses.reduce((s2, w) => {
-      const entry = stocks.find((st) => st.productId === p.id && st.warehouseId === w.id);
-      return s2 + (entry?.quantity || 0);
-    }, 0);
-  }, 0);
-  const target = warehouseFilter ? warehouses.find((w) => w.id === warehouseFilter)?.name : 'كل المواقع';
-  const body = `
-    ${brandHeader(settings)}
-    <h1 class="title">بيان جرد المخزون</h1>
-    ${metaItems([
-      { label: 'النطاق', value: target || '' },
-      { label: 'تاريخ الطباعة', value: formatDateTime(Date.now()) },
-      { label: 'عدد الأصناف', value: formatNumber(products.length) },
-    ])}
-    <table>
-      <thead>
-        <tr><th>المنتج</th><th>الباركود</th><th>الموقع</th><th>النوع</th><th>الكمية</th><th>سعر الشراء</th><th>قيمة المخزون</th></tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    ${totalsCard(
-      [{ label: 'إجمالي القطع', value: formatNumber(totalQty) }],
-      { label: 'قيمة المخزون', value: formatCurrency(total, settings.currency) }
-    )}
-    ${brandFooter(settings)}
-  `;
-  return pageWrap(body);
-}
-
 // ========== Generic Report ==========
 export type ReportTable = {
   title: string;
@@ -430,81 +377,351 @@ export function buildReportHtml(report: ReportTable, settings: Settings): string
   return pageWrap(body);
 }
 
-// ========== Daily Journal ==========
-export function buildJournalHtml(
+// ========== Inventory Print ==========
+export function buildInventoryHtml(
   data: {
-    sales: { invoiceNo: number; customer: string; user: string; total: number; itemCount: number; date: number }[];
-    totalSales: number;
-    totalProfit: number;
-    invoicesCount: number;
-    soldItems: number;
-    expenses: { category: string; amount: number; user: string; notes: string }[];
-    totalExpenses: number;
+    rows: { name: string; barcode: string; qty: number; purchasePrice: number; salePrice: number; purchaseValue: number; saleValue: number }[];
+    totalQty: number;
+    totalPurchaseValue: number;
+    totalSaleValue: number;
     fromDate: number | null;
     toDate: number | null;
   },
   settings: Settings
 ): string {
-  const salesRows = data.sales
-    .map(
-      (s, i) => `
-        <tr>
-          <td>${i + 1}</td>
-          <td>#${s.invoiceNo}</td>
-          <td>${escapeHtml(s.customer)}</td>
-          <td>${escapeHtml(s.user)}</td>
-          <td class="num">${formatNumber(s.itemCount)}</td>
-          <td class="num">${formatCurrency(s.total, settings.currency)}</td>
-          <td>${formatDateTime(s.date)}</td>
-        </tr>
-      `
-    )
-    .join('');
-  const expensesRows = data.expenses
-    .map(
-      (e, i) => `
-        <tr>
-          <td>${i + 1}</td>
-          <td>${escapeHtml(e.category)}</td>
-          <td>${escapeHtml(e.user)}</td>
-          <td>${escapeHtml(e.notes || '—')}</td>
-          <td class="num">${formatCurrency(e.amount, settings.currency)}</td>
-        </tr>
-      `
-    )
-    .join('');
-  const periodLabel = data.fromDate && data.toDate
-    ? `${formatDate(data.fromDate)} → ${formatDate(data.toDate)}`
-    : data.fromDate
-      ? formatDate(data.fromDate)
-      : 'كل التواريخ';
+  const rows = data.rows.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.barcode || '—')}</td>
+      <td class="num">${formatNumber(r.qty)}</td>
+      <td class="num">${formatCurrency(r.purchasePrice, settings.currency)}</td>
+      <td class="num">${formatCurrency(r.purchaseValue, settings.currency)}</td>
+      <td class="num">${formatCurrency(r.salePrice, settings.currency)}</td>
+      <td class="num">${formatCurrency(r.saleValue, settings.currency)}</td>
+    </tr>
+  `).join('');
+  const period = data.fromDate || data.toDate
+    ? `${data.fromDate ? formatDate(data.fromDate) : '—'} → ${data.toDate ? formatDate(data.toDate) : '—'}`
+    : 'الحالة الحالية';
   const body = `
     ${brandHeader(settings)}
-    <h1 class="title">يومية النشاط</h1>
+    <h1 class="title">جرد المخزون</h1>
     ${metaItems([
-      { label: 'الفترة', value: periodLabel },
+      { label: 'الفترة', value: period },
       { label: 'تاريخ الطباعة', value: formatDateTime(Date.now()) },
+      { label: 'عدد الأصناف', value: formatNumber(data.rows.length) },
     ])}
-    <h1 class="title" style="font-size:14px;">المبيعات</h1>
     <table>
-      <thead><tr><th>#</th><th>الفاتورة</th><th>العميل</th><th>المستخدم</th><th>الأصناف</th><th>الإجمالي</th><th>التاريخ</th></tr></thead>
-      <tbody>${salesRows || '<tr><td colspan="7">لا توجد مبيعات</td></tr>'}</tbody>
+      <thead>
+        <tr>
+          <th>المنتج</th>
+          <th>الباركود</th>
+          <th>الكمية</th>
+          <th>سعر الشراء</th>
+          <th>قيمة الشراء</th>
+          <th>سعر البيع</th>
+          <th>قيمة البيع</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
     </table>
-    ${data.expenses.length ? `
-      <h1 class="title" style="font-size:14px;margin-top:16px;">المصروفات</h1>
-      <table>
-        <thead><tr><th>#</th><th>التصنيف</th><th>المستخدم</th><th>ملاحظات</th><th>المبلغ</th></tr></thead>
-        <tbody>${expensesRows}</tbody>
-      </table>
-    ` : ''}
     ${totalsCard(
       [
-        { label: 'عدد الفواتير', value: formatNumber(data.invoicesCount) },
-        { label: 'الأصناف المباعة', value: formatNumber(data.soldItems) },
-        { label: 'إجمالي المبيعات', value: formatCurrency(data.totalSales, settings.currency) },
-        { label: 'إجمالي المصروفات', value: formatCurrency(data.totalExpenses, settings.currency) },
+        { label: 'إجمالي القطع', value: formatNumber(data.totalQty) },
+        { label: 'قيمة المخزون بسعر الشراء', value: formatCurrency(data.totalPurchaseValue, settings.currency) },
       ],
-      { label: 'صافي الربح', value: formatCurrency(data.totalProfit - data.totalExpenses, settings.currency) }
+      { label: 'قيمة المخزون بسعر البيع', value: formatCurrency(data.totalSaleValue, settings.currency) }
+    )}
+    ${brandFooter(settings)}
+  `;
+  return pageWrap(body);
+}
+
+// ========== Profits Print ==========
+export function buildProfitsHtml(
+  data: {
+    perInvoice: { invoiceNo: number; date: number; customer: string; total: number; cost: number; profit: number }[];
+    perProduct: { name: string; qty: number; revenue: number; cost: number; profit: number }[];
+    totalRevenue: number;
+    totalCost: number;
+    totalProfit: number;
+    fromDate: number | null;
+    toDate: number | null;
+  },
+  settings: Settings
+): string {
+  const period = data.fromDate || data.toDate
+    ? `${data.fromDate ? formatDate(data.fromDate) : '—'} → ${data.toDate ? formatDate(data.toDate) : '—'}`
+    : 'كل الفترات';
+  const invRows = data.perInvoice.slice(0, 200).map((i) => `
+    <tr>
+      <td>#${i.invoiceNo}</td>
+      <td>${formatDate(i.date)}</td>
+      <td>${escapeHtml(i.customer)}</td>
+      <td class="num">${formatCurrency(i.total, settings.currency)}</td>
+      <td class="num">${formatCurrency(i.cost, settings.currency)}</td>
+      <td class="num pos">${formatCurrency(i.profit, settings.currency)}</td>
+    </tr>
+  `).join('');
+  const prodRows = data.perProduct.slice(0, 200).map((p) => `
+    <tr>
+      <td>${escapeHtml(p.name)}</td>
+      <td class="num">${formatNumber(p.qty)}</td>
+      <td class="num">${formatCurrency(p.revenue, settings.currency)}</td>
+      <td class="num">${formatCurrency(p.cost, settings.currency)}</td>
+      <td class="num pos">${formatCurrency(p.profit, settings.currency)}</td>
+    </tr>
+  `).join('');
+  const body = `
+    ${brandHeader(settings)}
+    <h1 class="title">تقرير الأرباح</h1>
+    ${metaItems([
+      { label: 'الفترة', value: period },
+      { label: 'تاريخ الطباعة', value: formatDateTime(Date.now()) },
+    ])}
+    <div class="summary-block">
+      <div class="lbl">إجمالي الربح خلال الفترة</div>
+      <div class="val">${formatCurrency(data.totalProfit, settings.currency)}</div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">الإيرادات</div><div class="stat-value">${formatCurrency(data.totalRevenue, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">التكلفة</div><div class="stat-value">${formatCurrency(data.totalCost, settings.currency)}</div></div>
+    </div>
+
+    <h1 class="title" style="font-size:14px; margin-top:16px;">الأرباح حسب الفاتورة</h1>
+    <table>
+      <thead><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>التكلفة</th><th>الربح</th></tr></thead>
+      <tbody>${invRows || '<tr><td colspan="6">لا توجد فواتير</td></tr>'}</tbody>
+    </table>
+
+    <h1 class="title" style="font-size:14px; margin-top:16px;">الأرباح حسب المنتج</h1>
+    <table>
+      <thead><tr><th>المنتج</th><th>الكمية المباعة</th><th>الإيراد</th><th>التكلفة</th><th>الربح</th></tr></thead>
+      <tbody>${prodRows || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody>
+    </table>
+    ${brandFooter(settings)}
+  `;
+  return pageWrap(body);
+}
+
+// ========== Customer Payments Print ==========
+export function buildCustomerPaymentsHtml(
+  payments: CustomerPayment[],
+  total: number,
+  fromDate: number | null,
+  toDate: number | null,
+  settings: Settings
+): string {
+  const period = fromDate || toDate
+    ? `${fromDate ? formatDate(fromDate) : '—'} → ${toDate ? formatDate(toDate) : '—'}`
+    : 'كل الفترات';
+  const rows = payments.map((p, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(p.customerName)}</td>
+      <td class="num">${formatCurrency(p.amount, settings.currency)}</td>
+      <td>${formatDateTime(p.date)}</td>
+      <td>${escapeHtml(p.notes || '—')}</td>
+      <td>${escapeHtml(p.userName)}</td>
+    </tr>
+  `).join('');
+  const body = `
+    ${brandHeader(settings)}
+    <h1 class="title">سجل دفعات العملاء</h1>
+    ${metaItems([
+      { label: 'الفترة', value: period },
+      { label: 'عدد الدفعات', value: formatNumber(payments.length) },
+    ])}
+    <table>
+      <thead><tr><th>#</th><th>العميل</th><th>المبلغ</th><th>التاريخ</th><th>ملاحظات</th><th>المستخدم</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">لا توجد دفعات</td></tr>'}</tbody>
+    </table>
+    ${totalsCard([], { label: 'إجمالي الدفعات', value: formatCurrency(total, settings.currency) })}
+    ${brandFooter(settings)}
+  `;
+  return pageWrap(body);
+}
+
+// ========== Worker Payments Print ==========
+export function buildWorkerPaymentsHtml(
+  data: {
+    workers: { worker: Worker; paid: number; remaining: number; payments: WorkerPayment[] }[];
+    fromDate: number | null;
+    toDate: number | null;
+  },
+  settings: Settings
+): string {
+  const period = data.fromDate || data.toDate
+    ? `${data.fromDate ? formatDate(data.fromDate) : '—'} → ${data.toDate ? formatDate(data.toDate) : '—'}`
+    : 'كل الفترات';
+  const rows = data.workers.map((w) => `
+    <tr>
+      <td>${escapeHtml(w.worker.name)}</td>
+      <td>${escapeHtml(w.worker.jobTitle || '—')}</td>
+      <td class="num">${formatCurrency(w.worker.maxAllowed, settings.currency)}</td>
+      <td class="num">${formatCurrency(w.paid, settings.currency)}</td>
+      <td class="num pos">${formatCurrency(w.remaining, settings.currency)}</td>
+    </tr>
+  `).join('');
+  const totalAllowed = data.workers.reduce((s, x) => s + x.worker.maxAllowed, 0);
+  const totalPaid = data.workers.reduce((s, x) => s + x.paid, 0);
+  const totalRemaining = data.workers.reduce((s, x) => s + Math.max(0, x.remaining), 0);
+  const body = `
+    ${brandHeader(settings)}
+    <h1 class="title">قبض العمال</h1>
+    ${metaItems([
+      { label: 'الفترة', value: period },
+      { label: 'عدد العمال', value: formatNumber(data.workers.length) },
+    ])}
+    <table>
+      <thead><tr><th>الاسم</th><th>الوظيفة</th><th>الحد المسموح</th><th>المصروف</th><th>المتبقي</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody>
+    </table>
+    ${totalsCard(
+      [
+        { label: 'إجمالي الحدود', value: formatCurrency(totalAllowed, settings.currency) },
+        { label: 'إجمالي المصروف', value: formatCurrency(totalPaid, settings.currency) },
+      ],
+      { label: 'إجمالي المتبقي', value: formatCurrency(totalRemaining, settings.currency) }
+    )}
+    ${brandFooter(settings)}
+  `;
+  return pageWrap(body);
+}
+
+// ========== Daily Journal (Income / Expenses / Net) ==========
+export function buildJournalHtml(
+  data: {
+    salesPaid: { invoiceNo: number; customer: string; user: string; total: number; date: number }[];
+    customerPayments: { customerName: string; amount: number; date: number; notes: string }[];
+    expenses: { category: string; amount: number; user: string; notes: string; date: number }[];
+    workerPayments: { workerName: string; amount: number; date: number; notes: string }[];
+    saleReturns: { returnNo: number; total: number; date: number; customerName: string }[];
+    totalSalesPaid: number;
+    totalCustomerPayments: number;
+    totalIncome: number;
+    totalExpenses: number;
+    totalWorkerPayments: number;
+    totalOutflow: number;
+    netCash: number;
+    totalSaleReturns: number;
+    fromDate: number | null;
+    toDate: number | null;
+  },
+  settings: Settings
+): string {
+  const period = data.fromDate || data.toDate
+    ? `${data.fromDate ? formatDate(data.fromDate) : '—'} → ${data.toDate ? formatDate(data.toDate) : '—'}`
+    : 'كل الفترات';
+  const salesRows = data.salesPaid.map((s, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>#${s.invoiceNo}</td>
+      <td>${escapeHtml(s.customer)}</td>
+      <td>${escapeHtml(s.user)}</td>
+      <td class="num pos">${formatCurrency(s.total, settings.currency)}</td>
+      <td>${formatDateTime(s.date)}</td>
+    </tr>
+  `).join('');
+  const cpRows = data.customerPayments.map((p, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(p.customerName)}</td>
+      <td>${escapeHtml(p.notes || '—')}</td>
+      <td class="num pos">${formatCurrency(p.amount, settings.currency)}</td>
+      <td>${formatDateTime(p.date)}</td>
+    </tr>
+  `).join('');
+  const expRows = data.expenses.map((e, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(e.category)}</td>
+      <td>${escapeHtml(e.user)}</td>
+      <td>${escapeHtml(e.notes || '—')}</td>
+      <td class="num neg">${formatCurrency(e.amount, settings.currency)}</td>
+      <td>${formatDateTime(e.date)}</td>
+    </tr>
+  `).join('');
+  const wpRows = data.workerPayments.map((w, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(w.workerName)}</td>
+      <td>${escapeHtml(w.notes || '—')}</td>
+      <td class="num neg">${formatCurrency(w.amount, settings.currency)}</td>
+      <td>${formatDateTime(w.date)}</td>
+    </tr>
+  `).join('');
+  const retRows = data.saleReturns.map((r, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>#${r.returnNo}</td>
+      <td>${escapeHtml(r.customerName)}</td>
+      <td class="num neg">${formatCurrency(r.total, settings.currency)}</td>
+      <td>${formatDateTime(r.date)}</td>
+    </tr>
+  `).join('');
+
+  const body = `
+    ${brandHeader(settings)}
+    <h1 class="title">يومية النشاط - الوارد والمنصرف</h1>
+    ${metaItems([
+      { label: 'الفترة', value: period },
+      { label: 'تاريخ الطباعة', value: formatDateTime(Date.now()) },
+    ])}
+
+    <div class="summary-block">
+      <div class="lbl">صافي النقدية الفعلي</div>
+      <div class="val">${formatCurrency(data.netCash, settings.currency)}</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">إجمالي الوارد</div><div class="stat-value pos">${formatCurrency(data.totalIncome, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">إجمالي المنصرف</div><div class="stat-value neg">${formatCurrency(data.totalOutflow, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">المبيعات المدفوعة</div><div class="stat-value">${formatCurrency(data.totalSalesPaid, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">دفعات العملاء</div><div class="stat-value">${formatCurrency(data.totalCustomerPayments, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">المصروفات</div><div class="stat-value">${formatCurrency(data.totalExpenses, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">قبض العمال</div><div class="stat-value">${formatCurrency(data.totalWorkerPayments, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">المرتجعات (منفصلة)</div><div class="stat-value neg">${formatCurrency(data.totalSaleReturns, settings.currency)}</div></div>
+    </div>
+
+    <div class="totals-section-title">الوارد - المبيعات المدفوعة</div>
+    <table>
+      <thead><tr><th>#</th><th>الفاتورة</th><th>العميل</th><th>المستخدم</th><th>المدفوع</th><th>التاريخ</th></tr></thead>
+      <tbody>${salesRows || '<tr><td colspan="6">لا توجد فواتير</td></tr>'}</tbody>
+    </table>
+
+    <div class="totals-section-title">الوارد - دفعات العملاء</div>
+    <table>
+      <thead><tr><th>#</th><th>العميل</th><th>ملاحظات</th><th>المبلغ</th><th>التاريخ</th></tr></thead>
+      <tbody>${cpRows || '<tr><td colspan="5">لا توجد دفعات</td></tr>'}</tbody>
+    </table>
+
+    <div class="totals-section-title">المنصرف - المصروفات</div>
+    <table>
+      <thead><tr><th>#</th><th>التصنيف</th><th>المستخدم</th><th>ملاحظات</th><th>المبلغ</th><th>التاريخ</th></tr></thead>
+      <tbody>${expRows || '<tr><td colspan="6">لا توجد مصروفات</td></tr>'}</tbody>
+    </table>
+
+    <div class="totals-section-title">المنصرف - قبض العمال</div>
+    <table>
+      <thead><tr><th>#</th><th>العامل</th><th>ملاحظات</th><th>المبلغ</th><th>التاريخ</th></tr></thead>
+      <tbody>${wpRows || '<tr><td colspan="5">لا يوجد قبض</td></tr>'}</tbody>
+    </table>
+
+    ${data.saleReturns.length ? `
+      <div class="totals-section-title">المرتجعات (لا تحتسب من المبيعات)</div>
+      <table>
+        <thead><tr><th>#</th><th>المرتجع</th><th>العميل</th><th>القيمة</th><th>التاريخ</th></tr></thead>
+        <tbody>${retRows}</tbody>
+      </table>
+    ` : ''}
+
+    ${totalsCard(
+      [
+        { label: 'إجمالي الوارد', value: formatCurrency(data.totalIncome, settings.currency) },
+        { label: 'إجمالي المنصرف', value: formatCurrency(data.totalOutflow, settings.currency) },
+      ],
+      { label: 'صافي النقدية', value: formatCurrency(data.netCash, settings.currency) }
     )}
     ${brandFooter(settings)}
   `;
@@ -518,7 +735,6 @@ export async function performPrint(html: string, fileName: string, action: Print
   if (action === 'pdf') {
     const { uri } = await Print.printToFileAsync({ html, base64: false });
     if (Platform.OS === 'web') {
-      // Open PDF in new tab
       // @ts-ignore
       if (typeof window !== 'undefined') window.open(uri, '_blank');
       return;
@@ -527,15 +743,12 @@ export async function performPrint(html: string, fileName: string, action: Print
     const target = `${FileSystem.documentDirectory}${safeName}.pdf`;
     try {
       await FileSystem.copyAsync({ from: uri, to: target });
-    } catch {
-      // ignore copy errors
-    }
+    } catch {}
     if (await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: fileName });
     }
     return;
   }
-  // print or preview both invoke Print.printAsync (shows preview before print)
   await Print.printAsync({ html });
 }
 
