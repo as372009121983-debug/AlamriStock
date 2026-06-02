@@ -34,9 +34,10 @@ export default function MoreScreen() {
     expenses,
     customerPayments,
     workers,
+    workerAdvances,
     settings,
   } = useStore();
-  const { user, isOwner, logout, pendingUsersCount } = useAuth();
+  const { user, isOwner, logout, pendingUsersCount, isSubUser } = useAuth();
 
   const sections: { title: string; items: Item[] }[] = [
     {
@@ -100,6 +101,15 @@ export default function MoreScreen() {
           bg: Colors.warningSoft,
           route: '/workers',
           count: workers.length,
+        },
+        {
+          title: 'سلفات العمال',
+          subtitle: 'تسجيل السلف وتسديد الديون',
+          icon: 'hand-coin-outline',
+          color: Colors.info,
+          bg: Colors.infoSoft,
+          route: '/worker-advances',
+          count: workerAdvances.length,
         },
         {
           title: 'المصروفات',
@@ -261,13 +271,18 @@ export default function MoreScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.brandCard}>
           <View style={styles.brandIcon}>
-            <MaterialCommunityIcons name="store" size={28} color={Colors.primary} />
+            <MaterialCommunityIcons
+              name={isSubUser ? 'account-circle' : 'shield-crown'}
+              size={28}
+              color={Colors.primary}
+            />
           </View>
           <View style={{ flex: 1, alignItems: 'flex-end' }}>
             <Text style={styles.brandName}>{user?.name || 'مستخدم'}</Text>
+            {user?.phone ? <Text style={styles.brandPhone}>{user.phone}</Text> : null}
             <View style={styles.roleBadge}>
               <Text style={styles.roleText}>
-                {user?.role === 'owner' ? 'مدير النظام' : 'مشاهدة فقط'}
+                {isSubUser ? 'مستخدم فرعي' : 'مدير النظام'}
               </Text>
             </View>
           </View>
@@ -342,7 +357,7 @@ export default function MoreScreen() {
 
         <View style={{ alignItems: 'center', gap: 4, marginTop: Spacing.xl }}>
           <Text style={styles.developer}>تطوير وملكية: {settings.ownerName}</Text>
-          <Text style={styles.version}>الإصدار 4.0.0</Text>
+          <Text style={styles.version}>الإصدار 5.0.0</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -372,6 +387,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   brandName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
+  brandPhone: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   roleBadge: {
     marginTop: 4,
     backgroundColor: Colors.primarySoft,

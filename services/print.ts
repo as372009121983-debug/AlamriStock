@@ -17,6 +17,7 @@ import {
   CustomerPayment,
   WorkerPayment,
   Worker,
+  WorkerAdvance,
 } from '@/constants/types';
 
 const ARABIC_FONT_CSS = `
@@ -722,6 +723,84 @@ export function buildJournalHtml(
         { label: 'إجمالي المنصرف', value: formatCurrency(data.totalOutflow, settings.currency) },
       ],
       { label: 'صافي النقدية', value: formatCurrency(data.netCash, settings.currency) }
+    )}
+    ${brandFooter(settings)}
+  `;
+  return pageWrap(body);
+}
+
+// ========== Worker Advances Print ==========
+export function buildWorkerAdvancesHtml(
+  data: {
+    advances: WorkerAdvance[];
+    byWorker: { worker: Worker; totalAdvances: number; totalRepayments: number; balance: number; operationsCount: number }[];
+    totalAdvances: number;
+    totalRepayments: number;
+    balance: number;
+    fromDate: number | null;
+    toDate: number | null;
+  },
+  settings: Settings
+): string {
+  const period = data.fromDate || data.toDate
+    ? `${data.fromDate ? formatDate(data.fromDate) : '—'} → ${data.toDate ? formatDate(data.toDate) : '—'}`
+    : 'كل الفترات';
+  const workerRows = data.byWorker.map((s) => `
+    <tr>
+      <td>${escapeHtml(s.worker.name)}</td>
+      <td>${escapeHtml(s.worker.jobTitle || '—')}</td>
+      <td class="num">${formatCurrency(s.totalAdvances, settings.currency)}</td>
+      <td class="num pos">${formatCurrency(s.totalRepayments, settings.currency)}</td>
+      <td class="num ${s.balance > 0 ? 'neg' : 'pos'}">${formatCurrency(s.balance, settings.currency)}</td>
+    </tr>
+  `).join('');
+  const opsRows = data.advances.slice(0, 200).map((a, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(a.workerName)}</td>
+      <td><span class="pill ${a.type === 'advance' ? 'pill-r' : 'pill-g'}">${a.type === 'advance' ? 'سلفة' : 'تسديد'}</span></td>
+      <td class="num ${a.type === 'advance' ? 'neg' : 'pos'}">${a.type === 'advance' ? '-' : '+'}${formatCurrency(a.amount, settings.currency)}</td>
+      <td>${escapeHtml(a.notes || '—')}</td>
+      <td>${formatDateTime(a.date)}</td>
+    </tr>
+  `).join('');
+  const body = `
+    ${brandHeader(settings)}
+    <h1 class="title">سلفات العمال - كشف حساب</h1>
+    ${metaItems([
+      { label: 'الفترة', value: period },
+      { label: 'تاريخ الطباعة', value: formatDateTime(Date.now()) },
+      { label: 'عدد العمليات', value: formatNumber(data.advances.length) },
+    ])}
+
+    <div class="summary-block">
+      <div class="lbl">إجمالي الرصيد المتبقي على العمال</div>
+      <div class="val">${formatCurrency(data.balance, settings.currency)}</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-label">إجمالي السلفات</div><div class="stat-value neg">${formatCurrency(data.totalAdvances, settings.currency)}</div></div>
+      <div class="stat-card"><div class="stat-label">إجمالي التسديد</div><div class="stat-value pos">${formatCurrency(data.totalRepayments, settings.currency)}</div></div>
+    </div>
+
+    <div class="totals-section-title">كشف حساب العمال</div>
+    <table>
+      <thead><tr><th>الاسم</th><th>الوظيفة</th><th>السلفات</th><th>المسدد</th><th>الرصيد</th></tr></thead>
+      <tbody>${workerRows || '<tr><td colspan="5">لا توجد بيانات</td></tr>'}</tbody>
+    </table>
+
+    <div class="totals-section-title">سجل العمليات</div>
+    <table>
+      <thead><tr><th>#</th><th>العامل</th><th>النوع</th><th>المبلغ</th><th>ملاحظات</th><th>التاريخ</th></tr></thead>
+      <tbody>${opsRows || '<tr><td colspan="6">لا توجد عمليات</td></tr>'}</tbody>
+    </table>
+
+    ${totalsCard(
+      [
+        { label: 'إجمالي السلفات', value: formatCurrency(data.totalAdvances, settings.currency) },
+        { label: 'إجمالي التسديد', value: formatCurrency(data.totalRepayments, settings.currency) },
+      ],
+      { label: 'الرصيد المتبقي', value: formatCurrency(data.balance, settings.currency) }
     )}
     ${brandFooter(settings)}
   `;

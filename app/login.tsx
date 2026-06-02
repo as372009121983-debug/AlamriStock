@@ -97,7 +97,7 @@ export default function LoginScreen() {
             </LinearGradient>
 
             <View style={styles.formCard}>
-              <Text style={styles.formTitle}>تسجيل الدخول</Text>
+              <Text style={styles.formTitle}>تسجيل دخول المالك</Text>
               <Text style={styles.formSub}>أدخل بياناتك للوصول إلى حسابك السحابي</Text>
 
               <View style={{ marginTop: Spacing.lg }}>
@@ -135,7 +135,7 @@ export default function LoginScreen() {
                 </View>
 
                 <Button
-                  title={loading ? 'جاري الدخول...' : 'تسجيل الدخول'}
+                  title={loading ? 'جاري الدخول...' : 'تسجيل دخول المالك'}
                   icon="login"
                   onPress={handleLogin}
                   loading={loading}
@@ -143,6 +143,17 @@ export default function LoginScreen() {
                   size="lg"
                   style={{ marginTop: Spacing.lg }}
                 />
+
+                <Pressable
+                  onPress={() => router.push('/user-login')}
+                  style={({ pressed }) => [styles.userLoginBtn, pressed && { opacity: 0.85 }]}
+                >
+                  <MaterialCommunityIcons name="account-group" size={20} color={Colors.white} />
+                  <Text style={styles.userLoginText}>تسجيل دخول المستخدمين</Text>
+                  <View style={styles.phoneIcon}>
+                    <MaterialCommunityIcons name="cellphone" size={14} color={Colors.white} />
+                  </View>
+                </Pressable>
 
                 <View style={styles.dividerRow}>
                   <View style={styles.dividerLine} />
@@ -182,7 +193,7 @@ export default function LoginScreen() {
             <View style={styles.footer}>
               <Text style={styles.footerOwner}>تطوير وملكية</Text>
               <Text style={styles.footerName}>عبدالرحمن سلامة</Text>
-              <Text style={styles.footerVer}>الإصدار 3.0.0 • مزامنة سحابية</Text>
+              <Text style={styles.footerVer}>الإصدار 5.0.0 • نظام متعدد المستخدمين</Text>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -262,6 +273,22 @@ const styles = StyleSheet.create({
   checkActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   rememberText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   forgotText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  userLoginBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.md,
+    backgroundColor: Colors.success,
+    borderRadius: Radius.md,
+    paddingVertical: 14,
+    marginTop: Spacing.md,
+    minHeight: 52,
+  },
+  userLoginText: { color: Colors.white, fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  phoneIcon: {
+    width: 24, height: 24, borderRadius: Radius.full,
+    backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center',
+  },
   dividerRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',

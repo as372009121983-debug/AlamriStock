@@ -18,7 +18,11 @@ import {
   deleteAppUserRecord,
   fetchAppUsersList,
   updateAppUserRecord,
+  subUserLogin,
+  subUserRequestJoin,
+  subUserCheckStatus,
 } from '@/services/cloud';
+import { loadData, saveData, removeData, StorageKeys } from '@/services/storage';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -37,6 +41,7 @@ export type AuthContextType = {
   googleLoading: boolean;
   user: AppUser | null;
   session: Session | null;
+  isSubUser: boolean;
   users: AppUser[];
   pendingUsersCount: number;
   needsSetup: boolean;
@@ -48,6 +53,8 @@ export type AuthContextType = {
   canManageUsers: boolean;
   canManageSettings: boolean;
   signIn: (email: string, password: string, remember?: boolean) => Promise<{ ok: boolean; message?: string }>;
+  signInWithPhone: (phone: string, password: string) => Promise<{ ok: boolean; message?: string; status?: string }>;
+  requestJoinByPhone: (phone: string, password: string, name: string) => Promise<{ ok: boolean; message?: string }>;
   sendSignUpOTP: (data: { name: string; email: string; password: string }) => Promise<{ ok: boolean; message?: string }>;
   verifyEmailOTP: (otp: string) => Promise<{ ok: boolean; message?: string }>;
   resendSignUpOTP: () => Promise<{ ok: boolean; message?: string }>;
@@ -59,7 +66,7 @@ export type AuthContextType = {
   logout: () => Promise<void>;
   login: (email: string, password: string, remember?: boolean) => Promise<{ ok: boolean; message?: string }>;
   registerOwner: (data: { name: string; email: string; password: string }) => Promise<{ ok: boolean; message?: string; needsConfirmation?: boolean }>;
-  addUser: (data: { name: string; email: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => Promise<{ ok: boolean; message?: string }>;
+  addUser: (data: { name: string; email: string; phone?: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => Promise<{ ok: boolean; message?: string }>;
   updateUser: (id: string, data: Partial<AppUser>) => Promise<{ ok: boolean; message?: string }>;
   deleteUser: (id: string) => Promise<{ ok: boolean; message?: string }>;
   approveUser: (id: string) => Promise<{ ok: boolean; message?: string }>;
@@ -134,15 +141,34 @@ function translateError(message: string): string {
 function mapAppUserRow(row: any): AppUser {
   return {
     id: row.id,
+    ownerId: row.owner_id,
     email: row.email || '',
     username: row.email || '',
     password: row.password || '',
     name: row.name || '',
+    phone: row.phone || '',
     role: (row.role || 'sales') as UserRole,
     active: row.active !== false,
     status: (row.status || 'approved') as UserStatus,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
     approvedAt: row.approved_at ? new Date(row.approved_at).getTime() : undefined,
+  };
+}
+
+function mapSubUserResponse(row: any): AppUser {
+  return {
+    id: row.id,
+    ownerId: row.ownerId,
+    email: row.email || '',
+    username: row.email || '',
+    password: '',
+    name: row.name || '',
+    phone: row.phone || '',
+    role: (row.role || 'sales') as UserRole,
+    active: row.active !== false,
+    status: (row.status || 'approved') as UserStatus,
+    createdAt: row.createdAt ? new Date(row.createdAt).getTime() : Date.now(),
+    approvedAt: row.approvedAt ? new Date(row.approvedAt).getTime() : undefined,
   };
 }
 
@@ -155,22 +181,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initializing, setInitializing] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<AppUser | null>(null);
+  const [sessionUser, setSessionUser] = useState<AppUser | null>(null);
+  const [subUser, setSubUser] = useState<AppUser | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [pendingSignup, setPendingSignup] = useState<PendingSignup | null>(null);
 
+  // Effective user: sub-user takes priority if both exist
+  const user = subUser || sessionUser;
+  const isSubUser = !!subUser && !!subUser.ownerId;
+
+  // Initialize: try to restore sub-user session OR get supabase session
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(buildUserFromSession(session));
+    (async () => {
+      try {
+        const cached = await loadData<AppUser | null>(StorageKeys.subUserSession, null);
+        if (cached && cached.id && cached.ownerId) {
+          // Verify with server that user is still approved
+          const result: any = await subUserCheckStatus(cached.id);
+          if (result?.ok && result.user) {
+            const refreshed = mapSubUserResponse(result.user);
+            if (refreshed.status === 'approved' && refreshed.active) {
+              setSubUser(refreshed);
+              await saveData(StorageKeys.subUserSession, refreshed);
+            } else {
+              await removeData(StorageKeys.subUserSession);
+            }
+          } else {
+            // Could be offline; trust cache for now
+            setSubUser(cached);
+          }
+        }
+      } catch {}
+
+      const { data: { session: existingSession } } = await supabase.auth.getSession();
+      setSession(existingSession);
+      setSessionUser(buildUserFromSession(existingSession));
       setReady(true);
-    });
+    })();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      setUser(buildUserFromSession(session));
+      setSessionUser(buildUserFromSession(session));
     });
 
     return () => {
@@ -179,18 +232,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUsers = useCallback(async () => {
-    if (!user) {
-      setUsers([]);
+    const ownerId = user?.ownerId || user?.id;
+    if (!ownerId || isSubUser) {
+      // Sub-users don't manage users
       return;
     }
-    const result = await fetchAppUsersList(user.id);
+    const result = await fetchAppUsersList(ownerId);
     if (!result.error) {
       setUsers(result.data.map(mapAppUserRow));
     }
-  }, [user?.id]);
+  }, [user?.id, user?.ownerId, isSubUser]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || isSubUser) {
       setUsers([]);
       return;
     }
@@ -205,35 +259,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, isSubUser]);
 
-  // Periodic refresh of users for pending notifications
+  // Periodic refresh of users for pending notifications (owner only)
   useEffect(() => {
-    if (!user) return;
+    if (!user || isSubUser) return;
     const interval = setInterval(() => {
       refreshUsers();
-    }, 60000);
+    }, 30000);
     return () => clearInterval(interval);
-  }, [user?.id, refreshUsers]);
+  }, [user?.id, isSubUser, refreshUsers]);
 
   const signIn = useCallback(
     async (email: string, password: string) => {
       setInitializing(true);
       try {
+        // Clear any sub-user session before owner login
+        setSubUser(null);
+        await removeData(StorageKeys.subUserSession);
+
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim().toLowerCase(),
           password,
         });
         if (error) {
-          console.log('[SignIn Error]', error.message);
           return { ok: false, message: translateError(error.message) };
         }
         return { ok: true };
       } catch (e: any) {
-        console.log('[SignIn Exception]', e);
         return { ok: false, message: translateError(e?.message || '') };
       } finally {
         setInitializing(false);
+      }
+    },
+    []
+  );
+
+  const signInWithPhone = useCallback(
+    async (phone: string, password: string) => {
+      const cleanPhone = phone.trim();
+      if (!cleanPhone) return { ok: false, message: 'يرجى إدخال رقم الهاتف' };
+      if (!password) return { ok: false, message: 'يرجى إدخال كلمة المرور' };
+
+      setInitializing(true);
+      try {
+        // Clear any owner session before sub-user login
+        try { await supabase.auth.signOut(); } catch {}
+        setSession(null);
+        setSessionUser(null);
+
+        const result: any = await subUserLogin(cleanPhone, password);
+        if (!result?.ok) {
+          return { ok: false, message: result?.message || 'فشل تسجيل الدخول', status: result?.status };
+        }
+        const sub = mapSubUserResponse(result.user);
+        setSubUser(sub);
+        await saveData(StorageKeys.subUserSession, sub);
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, message: e?.message || 'فشل الاتصال' };
+      } finally {
+        setInitializing(false);
+      }
+    },
+    []
+  );
+
+  const requestJoinByPhone = useCallback(
+    async (phone: string, password: string, name: string) => {
+      const cleanPhone = phone.trim();
+      const cleanName = name.trim();
+      if (!cleanPhone || !password || !cleanName) {
+        return { ok: false, message: 'الاسم ورقم الهاتف وكلمة المرور مطلوبة' };
+      }
+      if (password.length < 4) {
+        return { ok: false, message: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' };
+      }
+      try {
+        const result: any = await subUserRequestJoin(cleanPhone, password, cleanName);
+        if (!result?.ok) return { ok: false, message: result?.message || 'فشل إرسال الطلب' };
+        return { ok: true, message: result.message };
+      } catch (e: any) {
+        return { ok: false, message: e?.message || 'فشل الاتصال' };
       }
     },
     []
@@ -258,7 +365,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           },
         });
         if (error) {
-          console.log('[SendOTP Error]', error.message);
           return { ok: false, message: translateError(error.message) };
         }
         setPendingSignup({ email: lower, name, password: data.password, sentAt: Date.now() });
@@ -343,6 +449,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (googleLoading) return { ok: false, message: 'جاري المعالجة، يرجى الانتظار...' };
     setGoogleLoading(true);
     try {
+      // Clear sub-user session
+      setSubUser(null);
+      await removeData(StorageKeys.subUserSession);
+
       const isWeb = Platform.OS === 'web' && typeof window !== 'undefined';
       const redirectTo = isWeb ? window.location.origin : Linking.createURL('/auth/callback');
       const { data, error } = await supabase.auth.signInWithOAuth({
@@ -399,33 +509,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     setPendingSignup(null);
-    await supabase.auth.signOut();
+    setSubUser(null);
+    await removeData(StorageKeys.subUserSession);
+    try { await supabase.auth.signOut(); } catch {}
+    setSession(null);
+    setSessionUser(null);
   }, []);
 
   const addUser = useCallback(
-    async (data: { name: string; email: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => {
-      if (!user) return { ok: false, message: 'غير مسجل دخول' };
+    async (data: { name: string; email: string; phone?: string; password: string; role: UserRole; active: boolean; status?: UserStatus }) => {
+      if (!user || isSubUser) return { ok: false, message: 'غير مسموح' };
       if (!data.name.trim()) return { ok: false, message: 'الاسم مطلوب' };
-      if (!data.email.trim()) return { ok: false, message: 'البريد الإلكتروني مطلوب' };
-      if (!isValidEmail(data.email)) return { ok: false, message: 'البريد الإلكتروني غير صحيح' };
       if (!data.password.trim() || data.password.length < 4) return { ok: false, message: 'كلمة المرور يجب أن تكون 4 أحرف على الأقل' };
-      const lower = data.email.trim().toLowerCase();
-      if (users.some((u) => u.email.trim().toLowerCase() === lower)) {
+
+      const cleanPhone = (data.phone || '').trim();
+      let cleanEmail = (data.email || '').trim().toLowerCase();
+
+      // If no email provided, generate one from phone
+      if (!cleanEmail && cleanPhone) {
+        cleanEmail = `${cleanPhone}@phone.local`;
+      }
+      if (!cleanEmail) return { ok: false, message: 'يرجى إدخال البريد أو رقم الهاتف' };
+
+      if (users.some((u) => u.email.trim().toLowerCase() === cleanEmail)) {
         return { ok: false, message: 'هذا البريد مستخدم بالفعل' };
       }
+      if (cleanPhone && users.some((u) => (u.phone || '') === cleanPhone)) {
+        return { ok: false, message: 'هذا الهاتف مستخدم بالفعل' };
+      }
+
       try {
         const { data: row, error } = await createAppUserRecord({
           owner_id: user.id,
-          email: lower,
+          email: cleanEmail,
           password: data.password,
           name: data.name.trim(),
+          phone: cleanPhone || undefined,
           role: data.role,
           active: data.active,
           status: data.status || 'pending',
         });
         if (error) {
           if ((error.message || '').toLowerCase().includes('duplicate')) {
-            return { ok: false, message: 'هذا البريد مستخدم بالفعل' };
+            return { ok: false, message: 'هذا البريد أو الهاتف مستخدم بالفعل' };
           }
           return { ok: false, message: translateError(error.message) };
         }
@@ -435,15 +561,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: translateError(e?.message || '') };
       }
     },
-    [user, users]
+    [user, users, isSubUser]
   );
 
   const updateUser = useCallback(
     async (id: string, data: Partial<AppUser>) => {
-      if (!user) return { ok: false, message: 'غير مسجل دخول' };
+      if (!user || isSubUser) return { ok: false, message: 'غير مسموح' };
       const updates: Record<string, any> = {};
       if (data.name !== undefined) updates.name = data.name.trim();
       if (data.email !== undefined) updates.email = data.email.trim().toLowerCase();
+      if (data.phone !== undefined) updates.phone = (data.phone || '').trim() || null;
       if (data.password !== undefined) updates.password = data.password;
       if (data.role !== undefined) updates.role = data.role;
       if (data.active !== undefined) updates.active = data.active;
@@ -462,6 +589,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   ...(data as Partial<AppUser>),
                   email: data.email ? data.email.trim().toLowerCase() : u.email,
                   username: data.email ? data.email.trim().toLowerCase() : u.username,
+                  phone: data.phone !== undefined ? (data.phone || '').trim() : u.phone,
                 }
               : u
           )
@@ -471,12 +599,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: translateError(e?.message || '') };
       }
     },
-    [user]
+    [user, isSubUser]
   );
 
   const deleteUser = useCallback(
     async (id: string) => {
-      if (!user) return { ok: false, message: 'غير مسجل دخول' };
+      if (!user || isSubUser) return { ok: false, message: 'غير مسموح' };
       try {
         const { error } = await deleteAppUserRecord(id);
         if (error) return { ok: false, message: translateError(error.message) };
@@ -486,7 +614,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: translateError(e?.message || '') };
       }
     },
-    [user]
+    [user, isSubUser]
   );
 
   const approveUser = useCallback(
@@ -504,6 +632,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const permissions = useMemo(() => getPermissions(user?.role || 'owner'), [user]);
+  const isOwner = !!user && (user.role === 'owner' || !user.ownerId);
+  const canEdit = !!user && (isOwner || permissions.canEditSales || permissions.canEditProducts || permissions.canEditCustomers || permissions.canEditPurchases || permissions.canEditExpenses);
+  const canManageUsers = !!user && isOwner;
+  const canManageSettings = !!user && (isOwner || permissions.canManageSettings);
 
   const pendingUsersCount = useMemo(
     () => users.filter((u) => u.status === 'pending').length,
@@ -518,17 +650,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         googleLoading,
         user,
         session,
+        isSubUser,
         users,
         pendingUsersCount,
         needsSetup: false,
         rememberMe: true,
         pendingSignup,
         permissions,
-        isOwner: !!user,
-        canEdit: !!user,
-        canManageUsers: !!user,
-        canManageSettings: !!user,
+        isOwner,
+        canEdit,
+        canManageUsers,
+        canManageSettings,
         signIn,
+        signInWithPhone,
+        requestJoinByPhone,
         sendSignUpOTP,
         verifyEmailOTP,
         resendSignUpOTP,

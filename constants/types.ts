@@ -211,6 +211,20 @@ export type WorkerPayment = {
   userName: string;
 };
 
+export type WorkerAdvanceType = 'advance' | 'repayment';
+
+export type WorkerAdvance = {
+  id: string;
+  workerId: string;
+  workerName: string;
+  type: WorkerAdvanceType;
+  amount: number;
+  date: number;
+  notes: string;
+  userId: string;
+  userName: string;
+};
+
 export type AppNotification = {
   id: string;
   type: 'join_request' | 'user_approved' | 'system' | 'low_stock';
@@ -321,10 +335,12 @@ export function getPermissions(role: UserRole): Permission {
 
 export type AppUser = {
   id: string;
+  ownerId?: string;
   email: string;
   username: string;
   password: string;
   name: string;
+  phone?: string;
   role: UserRole;
   active: boolean;
   status: UserStatus;
@@ -340,6 +356,7 @@ export type ActivityType =
   | 'supplier_add' | 'supplier_edit' | 'supplier_delete'
   | 'warehouse_add' | 'warehouse_edit' | 'warehouse_delete'
   | 'worker_add' | 'worker_edit' | 'worker_delete' | 'worker_payment' | 'worker_payment_delete'
+  | 'worker_advance' | 'worker_advance_delete' | 'worker_repayment' | 'worker_repayment_delete'
   | 'user_add' | 'user_edit' | 'user_delete' | 'user_approve' | 'user_reject'
   | 'settings_update';
 

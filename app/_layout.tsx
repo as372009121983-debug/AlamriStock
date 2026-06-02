@@ -9,7 +9,7 @@ import { StoreProvider } from '@/contexts/StoreContext';
 import { AdminGuardProvider } from '@/contexts/AdminGuardContext';
 import { useAuth } from '@/hooks/useAuth';
 
-const AUTH_ROUTES = new Set(['login', 'signup', 'forgot-password', 'verify-email']);
+const AUTH_ROUTES = new Set(['login', 'signup', 'forgot-password', 'verify-email', 'user-login']);
 
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, ready, pendingSignup } = useAuth();
@@ -45,6 +45,7 @@ export default function RootLayout() {
                 <StatusBar style="dark" />
                 <Stack screenOptions={{ headerShown: false }}>
                   <Stack.Screen name="login" />
+                  <Stack.Screen name="user-login" />
                   <Stack.Screen name="signup" />
                   <Stack.Screen name="verify-email" />
                   <Stack.Screen name="forgot-password" />
@@ -58,6 +59,7 @@ export default function RootLayout() {
                   <Stack.Screen name="expenses" />
                   <Stack.Screen name="customer-payments" />
                   <Stack.Screen name="workers" />
+                  <Stack.Screen name="worker-advances" />
                   <Stack.Screen name="journal" />
                   <Stack.Screen name="profits" />
                   <Stack.Screen name="inventory" />

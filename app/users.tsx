@@ -16,13 +16,14 @@ import { formatDateTime } from '@/services/format';
 
 type FormState = {
   email: string;
+  phone: string;
   password: string;
   name: string;
   role: UserRole;
   active: boolean;
   status: UserStatus;
 };
-const empty: FormState = { email: '', password: '', name: '', role: 'sales', active: true, status: 'pending' };
+const empty: FormState = { email: '', phone: '', password: '', name: '', role: 'sales', active: true, status: 'pending' };
 
 const ROLE_OPTIONS: UserRole[] = ['manager', 'head', 'sales', 'warehouse'];
 
@@ -53,12 +54,24 @@ export default function UsersScreen() {
   }
   function openEdit(u: AppUser) {
     setEditing(u);
-    setForm({ email: u.email, password: u.password, name: u.name, role: u.role, active: u.active, status: u.status });
+    setForm({
+      email: u.email,
+      phone: u.phone || '',
+      password: u.password,
+      name: u.name,
+      role: u.role,
+      active: u.active,
+      status: u.status,
+    });
     setModalVisible(true);
   }
   async function handleSubmit() {
-    if (!form.email.trim() || !form.password.trim() || !form.name.trim()) {
-      showAlert('تنبيه', 'الحقول المطلوبة فارغة');
+    if (!form.name.trim() || !form.password.trim()) {
+      showAlert('تنبيه', 'الاسم وكلمة المرور مطلوبان');
+      return;
+    }
+    if (!form.phone.trim() && !form.email.trim()) {
+      showAlert('تنبيه', 'يجب إدخال رقم الهاتف أو البريد الإلكتروني');
       return;
     }
     setLoading(true);
@@ -172,6 +185,12 @@ export default function UsersScreen() {
               </View>
               <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
                 <Text style={styles.name}>{item.name}</Text>
+                {item.phone ? (
+                  <View style={styles.contactRow}>
+                    <Text style={styles.contactText}>{item.phone}</Text>
+                    <MaterialCommunityIcons name="cellphone" size={14} color={Colors.textMuted} />
+                  </View>
+                ) : null}
                 <Text style={styles.email}>{item.email}</Text>
                 <View style={styles.tags}>
                   <View style={[styles.tag, { backgroundColor: colors.bg }]}>
@@ -219,7 +238,14 @@ export default function UsersScreen() {
       >
         <Input label="الاسم الكامل" value={form.name} onChangeText={(t) => setForm((p) => ({ ...p, name: t }))} />
         <Input
-          label="البريد الإلكتروني"
+          label="رقم الهاتف *"
+          value={form.phone}
+          onChangeText={(t) => setForm((p) => ({ ...p, phone: t }))}
+          placeholder="01xxxxxxxxx"
+          keyboardType="phone-pad"
+        />
+        <Input
+          label="البريد الإلكتروني (اختياري)"
           value={form.email}
           onChangeText={(t) => setForm((p) => ({ ...p, email: t }))}
           autoCapitalize="none"
@@ -232,6 +258,13 @@ export default function UsersScreen() {
           onChangeText={(t) => setForm((p) => ({ ...p, password: t }))}
           secureTextEntry
         />
+
+        <View style={styles.hintBox}>
+          <MaterialCommunityIcons name="information" size={16} color={Colors.info} />
+          <Text style={styles.hintText}>
+            سيستخدم المستخدم رقم الهاتف وكلمة المرور لتسجيل الدخول من شاشة "تسجيل دخول المستخدمين"
+          </Text>
+        </View>
 
         <Text style={styles.fieldLabel}>الدور والصلاحيات</Text>
         <View style={{ gap: Spacing.sm }}>
@@ -331,11 +364,19 @@ const styles = StyleSheet.create({
   avatarText: { fontSize: FontSize.xl, fontWeight: FontWeight.bold },
   name: { color: Colors.text, fontSize: FontSize.lg, fontWeight: FontWeight.bold },
   email: { color: Colors.textSecondary, fontSize: FontSize.sm, marginTop: 2 },
+  contactRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 4, marginTop: 2 },
+  contactText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
   tags: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 4, marginTop: 6 },
   tag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.full },
   tagText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
   meta: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 6 },
   pendingActions: { flexDirection: 'row-reverse', gap: Spacing.sm, marginTop: Spacing.sm },
+  hintBox: {
+    flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 8,
+    backgroundColor: Colors.infoSoft, padding: Spacing.sm, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.info, marginTop: Spacing.sm,
+  },
+  hintText: { flex: 1, color: Colors.info, fontSize: FontSize.xs, textAlign: 'right', lineHeight: 18 },
   fieldLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right', marginTop: Spacing.sm },
   roleOption: { flexDirection: 'row-reverse', alignItems: 'center', padding: Spacing.md, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.md, borderWidth: 1.5, borderColor: 'transparent' },
   roleOptionActive: { backgroundColor: Colors.primaryTint, borderColor: Colors.primary },

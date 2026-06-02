@@ -18,6 +18,7 @@ export const StorageKeys = {
   customerPayments: `${PREFIX}customer_payments`,
   workers: `${PREFIX}workers`,
   workerPayments: `${PREFIX}worker_payments`,
+  workerAdvances: `${PREFIX}worker_advances`,
   notifications: `${PREFIX}notifications`,
   activityLog: `${PREFIX}activity_log`,
   settings: `${PREFIX}settings`,
@@ -28,9 +29,11 @@ export const StorageKeys = {
   purchaseReturnCounter: `${PREFIX}purchase_return_counter`,
   customerPaymentCounter: `${PREFIX}customer_payment_counter`,
   workerPaymentCounter: `${PREFIX}worker_payment_counter`,
+  workerAdvanceCounter: `${PREFIX}worker_advance_counter`,
   users: `${PREFIX}users`,
   currentUserId: `${PREFIX}current_user_id`,
   rememberMe: `${PREFIX}remember_me`,
+  subUserSession: `${PREFIX}sub_user_session`,
 };
 
 export async function saveData<T>(key: string, value: T): Promise<void> {

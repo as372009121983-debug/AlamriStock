@@ -1,3 +1,4 @@
+
 // Powered by OnSpace.AI
 import React, {
   createContext,
@@ -32,10 +33,18 @@ import {
   TransferItem,
   Warehouse,
   Worker,
+  WorkerAdvance,
+  WorkerAdvanceType,
   WorkerPayment,
 } from '@/constants/types';
 import { useAuth } from '@/hooks/useAuth';
-import { AppDataBlob, pullAppData, pushAppData } from '@/services/cloud';
+import {
+  AppDataBlob,
+  pullAppData,
+  pushAppData,
+  subUserPullData,
+  subUserPushData,
+} from '@/services/cloud';
 
 export type StoreContextType = {
   ready: boolean;
@@ -55,6 +64,7 @@ export type StoreContextType = {
   customerPayments: CustomerPayment[];
   workers: Worker[];
   workerPayments: WorkerPayment[];
+  workerAdvances: WorkerAdvance[];
   notifications: AppNotification[];
   activityLog: ActivityLog[];
   settings: Settings;
@@ -65,6 +75,7 @@ export type StoreContextType = {
   purchaseReturnCounter: number;
   customerPaymentCounter: number;
   workerPaymentCounter: number;
+  workerAdvanceCounter: number;
   unreadNotifications: number;
   getStock: (productId: string, warehouseId: string) => number;
   getTotalStock: (productId: string) => number;
@@ -102,6 +113,8 @@ export type StoreContextType = {
   deleteWorker: (id: string) => { ok: boolean; message?: string };
   addWorkerPayment: (data: { workerId: string; amount: number; date?: number; notes?: string }) => { payment: WorkerPayment | null; error?: string };
   deleteWorkerPayment: (id: string) => void;
+  addWorkerAdvance: (data: { workerId: string; type: WorkerAdvanceType; amount: number; date?: number; notes?: string }) => { advance: WorkerAdvance | null; error?: string };
+  deleteWorkerAdvance: (id: string) => void;
   addNotification: (notif: Omit<AppNotification, 'id' | 'date' | 'read'>) => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -128,7 +141,7 @@ const defaultSettings: Settings = {
 const ACTIVITY_LIMIT = 1000;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, isSubUser } = useAuth();
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastCloudSyncAt, setLastCloudSyncAt] = useState<number | null>(null);
@@ -147,6 +160,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [customerPayments, setCustomerPayments] = useState<CustomerPayment[]>([]);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [workerPayments, setWorkerPayments] = useState<WorkerPayment[]>([]);
+  const [workerAdvances, setWorkerAdvances] = useState<WorkerAdvance[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityLog[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -157,17 +171,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [purchaseReturnCounter, setPurchaseReturnCounter] = useState<number>(1000);
   const [customerPaymentCounter, setCustomerPaymentCounter] = useState<number>(1000);
   const [workerPaymentCounter, setWorkerPaymentCounter] = useState<number>(1000);
+  const [workerAdvanceCounter, setWorkerAdvanceCounter] = useState<number>(1000);
 
   const lastCloudUpdateRef = useRef<string | null>(null);
-  const previousUserIdRef = useRef<string | null>(null);
+  const previousUserKeyRef = useRef<string | null>(null);
 
   // Load local cache on mount
   useEffect(() => {
     (async () => {
       const [
         p, c, s, sa, pu, wh, st, tr, sr, pr, ex,
-        cp, wk, wp, notif, al, settingsData,
-        ic, pc, tc, src, prc, cpc, wpc,
+        cp, wk, wp, wa, notif, al, settingsData,
+        ic, pc, tc, src, prc, cpc, wpc, wac,
       ] = await Promise.all([
         loadData<Product[]>(StorageKeys.products, []),
         loadData<Customer[]>(StorageKeys.customers, []),
@@ -183,6 +198,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         loadData<CustomerPayment[]>(StorageKeys.customerPayments, []),
         loadData<Worker[]>(StorageKeys.workers, []),
         loadData<WorkerPayment[]>(StorageKeys.workerPayments, []),
+        loadData<WorkerAdvance[]>(StorageKeys.workerAdvances, []),
         loadData<AppNotification[]>(StorageKeys.notifications, []),
         loadData<ActivityLog[]>(StorageKeys.activityLog, []),
         loadData<Settings>(StorageKeys.settings, defaultSettings),
@@ -193,6 +209,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         loadData<number>(StorageKeys.purchaseReturnCounter, 1000),
         loadData<number>(StorageKeys.customerPaymentCounter, 1000),
         loadData<number>(StorageKeys.workerPaymentCounter, 1000),
+        loadData<number>(StorageKeys.workerAdvanceCounter, 1000),
       ]);
 
       let warehousesData = wh;
@@ -211,7 +228,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const defaultMainId = warehousesData.find((w) => w.type === 'main' && w.isDefault)?.id
         || warehousesData.find((w) => w.type === 'main')?.id
-        || warehousesData[0].id;
+        || warehousesData[0]?.id; // Safely access warehousesData[0].id
 
       const migratedProducts: Product[] = p.map((prod) => ({
         ...prod,
@@ -224,7 +241,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const stocksList = [...stocksData];
       for (const prod of migratedProducts) {
-        const hasEntry = stocksList.some((entry) => entry.productId === prod.id);
+        if (!defaultMainId) continue; // Skip if no defaultMainId (no warehouses)
+        const hasEntry = stocksList.some((entry) => entry.productId === prod.id && entry.warehouseId === defaultMainId);
         if (!hasEntry) {
           stocksList.push({ productId: prod.id, warehouseId: defaultMainId, quantity: prod.quantity || 0 });
         }
@@ -247,6 +265,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCustomerPayments(cp);
       setWorkers(wk);
       setWorkerPayments(wp);
+      setWorkerAdvances(wa);
       setNotifications(notif);
       setActivityLog(al);
       setSettings({ ...defaultSettings, ...settingsData });
@@ -257,6 +276,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setPurchaseReturnCounter(prc);
       setCustomerPaymentCounter(cpc);
       setWorkerPaymentCounter(wpc);
+      setWorkerAdvanceCounter(wac);
       setReady(true);
     })();
   }, []);
@@ -276,6 +296,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) saveData(StorageKeys.customerPayments, customerPayments); }, [customerPayments, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.workers, workers); }, [workers, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.workerPayments, workerPayments); }, [workerPayments, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.workerAdvances, workerAdvances); }, [workerAdvances, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.notifications, notifications); }, [notifications, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.activityLog, activityLog); }, [activityLog, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.settings, settings); }, [settings, ready]);
@@ -286,16 +307,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) saveData(StorageKeys.purchaseReturnCounter, purchaseReturnCounter); }, [purchaseReturnCounter, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.customerPaymentCounter, customerPaymentCounter); }, [customerPaymentCounter, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.workerPaymentCounter, workerPaymentCounter); }, [workerPaymentCounter, ready]);
+  useEffect(() => { if (ready) saveData(StorageKeys.workerAdvanceCounter, workerAdvanceCounter); }, [workerAdvanceCounter, ready]);
 
   function collectBlob(): AppDataBlob {
     return {
       products, customers, suppliers, sales, purchases, warehouses, stocks,
       transfers, saleReturns, purchaseReturns, expenses,
-      customerPayments, workers, workerPayments, notifications,
+      customerPayments, workers, workerPayments, workerAdvances, notifications,
       activityLog, settings,
       invoiceCounter, purchaseCounter, transferCounter,
       saleReturnCounter, purchaseReturnCounter,
-      customerPaymentCounter, workerPaymentCounter,
+      customerPaymentCounter, workerPaymentCounter, workerAdvanceCounter,
     };
   }
 
@@ -314,6 +336,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (Array.isArray(blob.customerPayments)) setCustomerPayments(blob.customerPayments);
     if (Array.isArray(blob.workers)) setWorkers(blob.workers);
     if (Array.isArray(blob.workerPayments)) setWorkerPayments(blob.workerPayments);
+    if (Array.isArray(blob.workerAdvances)) setWorkerAdvances(blob.workerAdvances);
     if (Array.isArray(blob.notifications)) setNotifications(blob.notifications);
     if (Array.isArray(blob.activityLog)) setActivityLog(blob.activityLog);
     if (blob.settings) setSettings({ ...defaultSettings, ...blob.settings });
@@ -324,17 +347,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (typeof blob.purchaseReturnCounter === 'number') setPurchaseReturnCounter(blob.purchaseReturnCounter);
     if (typeof blob.customerPaymentCounter === 'number') setCustomerPaymentCounter(blob.customerPaymentCounter);
     if (typeof blob.workerPaymentCounter === 'number') setWorkerPaymentCounter(blob.workerPaymentCounter);
+    if (typeof blob.workerAdvanceCounter === 'number') setWorkerAdvanceCounter(blob.workerAdvanceCounter);
+  }
+
+  // Choose pull/push strategy based on user type
+  async function pullCloudData() {
+    if (!user) return null;
+    if (isSubUser) {
+      const result: any = await subUserPullData(user.id);
+      if (result?.ok) {
+        return { ok: true, data: result.blob, updatedAt: result.updatedAt };
+      }
+      return { ok: false, error: result?.message };
+    }
+    return await pullAppData(user.id);
+  }
+
+  async function pushCloudData(blob: AppDataBlob) {
+    if (!user) return { ok: false };
+    if (isSubUser) {
+      const result: any = await subUserPushData(user.id, blob);
+      if (result?.ok) {
+        return { ok: true, updatedAt: result.updatedAt };
+      }
+      return { ok: false, error: result?.message };
+    }
+    return await pushAppData(user.id, blob);
   }
 
   // On user change: pull from cloud
   useEffect(() => {
     if (!ready) return;
-    const currentUserId = user?.id || null;
-    const previousUserId = previousUserIdRef.current;
-    previousUserIdRef.current = currentUserId;
+    const currentKey = user ? `${user.ownerId || user.id}::${user.id}` : null;
+    const previousKey = previousUserKeyRef.current;
+    previousUserKeyRef.current = currentKey;
 
-    if (!currentUserId) {
-      if (previousUserId) {
+    if (!currentKey) {
+      if (previousKey) {
         setHasInitialSync(false);
         lastCloudUpdateRef.current = null;
         clearStorage().catch(() => null);
@@ -360,6 +409,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setCustomerPayments([]);
         setWorkers([]);
         setWorkerPayments([]);
+        setWorkerAdvances([]);
         setNotifications([]);
         setActivityLog([]);
         setSettings(defaultSettings);
@@ -370,22 +420,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setPurchaseReturnCounter(1000);
         setCustomerPaymentCounter(1000);
         setWorkerPaymentCounter(1000);
+        setWorkerAdvanceCounter(1000);
       }
       return;
     }
 
+    if (currentKey === previousKey) return;
+
     setHasInitialSync(false);
     setSyncing(true);
     (async () => {
-      const result = await pullAppData(currentUserId);
-      if (result.ok && result.data) {
+      const result: any = await pullCloudData();
+      if (result?.ok && result.data) {
         applyBlob(result.data);
         lastCloudUpdateRef.current = result.updatedAt || null;
         setLastCloudSyncAt(Date.now());
-      } else if (result.ok && !result.data) {
+      } else if (result?.ok && !result.data && !isSubUser) {
         const blob = collectBlob();
-        const r = await pushAppData(currentUserId, blob);
-        if (r.ok) {
+        const r: any = await pushCloudData(blob);
+        if (r?.ok) {
           lastCloudUpdateRef.current = r.updatedAt || null;
           setLastCloudSyncAt(Date.now());
         }
@@ -393,7 +446,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setHasInitialSync(true);
       setSyncing(false);
     })();
-  }, [user?.id, ready]);
+  }, [user?.id, user?.ownerId, isSubUser, ready, pullCloudData, pushCloudData]); // Added pullCloudData and pushCloudData to deps
 
   // Debounced push to cloud
   useEffect(() => {
@@ -402,24 +455,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!user) return;
       setSyncing(true);
       const blob = collectBlob();
-      const result = await pushAppData(user.id, blob);
-      if (result.ok && result.updatedAt) {
+      const result: any = await pushCloudData(blob);
+      if (result?.ok && result.updatedAt) {
         lastCloudUpdateRef.current = result.updatedAt;
         setLastCloudSyncAt(Date.now());
       }
       setSyncing(false);
     }, 2500);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     products, customers, suppliers, sales, purchases, warehouses, stocks,
     transfers, saleReturns, purchaseReturns, expenses,
-    customerPayments, workers, workerPayments, notifications,
+    customerPayments, workers, workerPayments, workerAdvances, notifications,
     settings,
     invoiceCounter, purchaseCounter, transferCounter,
     saleReturnCounter, purchaseReturnCounter,
-    customerPaymentCounter, workerPaymentCounter,
-    hasInitialSync, ready, user?.id,
+    customerPaymentCounter, workerPaymentCounter, workerAdvanceCounter,
+    hasInitialSync, ready, user, isSubUser, pushCloudData, // Added user and pushCloudData to deps
   ]);
 
   // Periodic poll for remote changes
@@ -427,27 +479,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!user || !hasInitialSync) return;
     const interval = setInterval(async () => {
       if (!user) return;
-      const result = await pullAppData(user.id);
-      if (result.ok && result.data && result.updatedAt && result.updatedAt !== lastCloudUpdateRef.current) {
+      const result: any = await pullCloudData();
+      if (result?.ok && result.data && result.updatedAt && result.updatedAt !== lastCloudUpdateRef.current) {
         applyBlob(result.data);
         lastCloudUpdateRef.current = result.updatedAt;
         setLastCloudSyncAt(Date.now());
       }
-    }, 30000);
+    }, 20000);
     return () => clearInterval(interval);
-  }, [user?.id, hasInitialSync]);
+  }, [user, isSubUser, hasInitialSync, pullCloudData]); // Added user and pullCloudData to deps
 
   const syncNow = useCallback(async () => {
     if (!user) return;
     setSyncing(true);
-    const result = await pullAppData(user.id);
-    if (result.ok && result.data) {
+    const result: any = await pullCloudData();
+    if (result?.ok && result.data) {
       applyBlob(result.data);
       lastCloudUpdateRef.current = result.updatedAt || null;
       setLastCloudSyncAt(Date.now());
     }
     setSyncing(false);
-  }, [user?.id]);
+  }, [user, pullCloudData]); // Added user to deps
 
   const defaultMainWarehouseId = useMemo(() => {
     const d = warehouses.find((w) => w.type === 'main' && w.isDefault);
@@ -468,7 +520,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   function adjustStockList(list: StockEntry[], productId: string, warehouseId: string, delta: number): StockEntry[] {
     const idx = list.findIndex((s) => s.productId === productId && s.warehouseId === warehouseId);
     if (idx === -1) {
-      if (delta < 0) return list;
+      if (delta < 0) return list; // Cannot decrease stock if product/warehouse combo doesn't exist
       return [...list, { productId, warehouseId, quantity: delta }];
     }
     const updated = [...list];
@@ -495,7 +547,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       date: Date.now(),
     };
     setActivityLog((prev) => [entry, ...prev].slice(0, ACTIVITY_LIMIT));
-  }, [user]);
+  }, [user, setActivityLog]); // Added setActivityLog to deps
 
   const addProduct = useCallback<StoreContextType['addProduct']>((data, warehouseId, initialQty) => {
     const wh = warehouses.find((w) => w.id === warehouseId);
@@ -508,57 +560,57 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProducts((prev) => syncProductQuantities([product, ...prev], newStocks));
     logActivity('product_add', `إضافة منتج: ${product.name}`, { refId: productId });
     return { ok: true };
-  }, [warehouses, stocks, logActivity]);
+  }, [warehouses, stocks, setStocks, setProducts, logActivity]); // Added setStocks and setProducts to deps
 
   const updateProduct = useCallback((id: string, data: Partial<Product>) => {
     setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...data } : p)));
     const target = products.find((p) => p.id === id);
     logActivity('product_edit', `تعديل منتج: ${target?.name || id}`, { refId: id });
-  }, [products, logActivity]);
+  }, [products, setProducts, logActivity]); // Added setProducts to deps
 
   const deleteProduct = useCallback((id: string) => {
     const target = products.find((p) => p.id === id);
     setStocks((prev) => prev.filter((s) => s.productId !== id));
     setProducts((prev) => prev.filter((p) => p.id !== id));
     if (target) logActivity('product_delete', `حذف منتج: ${target.name}`, { refId: id });
-  }, [products, logActivity]);
+  }, [products, setStocks, setProducts, logActivity]); // Added setStocks and setProducts to deps
 
   const addCustomer = useCallback<StoreContextType['addCustomer']>((data) => {
     const customer: Customer = { id: generateId(), createdAt: Date.now(), debt: data.debt ?? 0, name: data.name, phone: data.phone, address: data.address };
     setCustomers((prev) => [customer, ...prev]);
     logActivity('customer_add', `إضافة عميل: ${customer.name}`, { refId: customer.id });
     return customer;
-  }, [logActivity]);
+  }, [setCustomers, logActivity]); // Added setCustomers to deps
 
   const updateCustomer = useCallback((id: string, data: Partial<Customer>) => {
     setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
     const target = customers.find((c) => c.id === id);
     logActivity('customer_edit', `تعديل عميل: ${target?.name || id}`, { refId: id });
-  }, [customers, logActivity]);
+  }, [customers, setCustomers, logActivity]); // Added setCustomers to deps
 
   const deleteCustomer = useCallback((id: string) => {
     const target = customers.find((c) => c.id === id);
     setCustomers((prev) => prev.filter((c) => c.id !== id));
     if (target) logActivity('customer_delete', `حذف عميل: ${target.name}`, { refId: id });
-  }, [customers, logActivity]);
+  }, [customers, setCustomers, logActivity]); // Added setCustomers to deps
 
   const addSupplier = useCallback((data: Omit<Supplier, 'id' | 'createdAt'>) => {
     const supplier: Supplier = { ...data, id: generateId(), createdAt: Date.now() };
     setSuppliers((prev) => [supplier, ...prev]);
     logActivity('supplier_add', `إضافة مورد: ${supplier.name}`, { refId: supplier.id });
-  }, [logActivity]);
+  }, [setSuppliers, logActivity]); // Added setSuppliers to deps
 
   const updateSupplier = useCallback((id: string, data: Partial<Supplier>) => {
     setSuppliers((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
     const target = suppliers.find((s) => s.id === id);
     logActivity('supplier_edit', `تعديل مورد: ${target?.name || id}`, { refId: id });
-  }, [suppliers, logActivity]);
+  }, [suppliers, setSuppliers, logActivity]); // Added setSuppliers to deps
 
   const deleteSupplier = useCallback((id: string) => {
     const target = suppliers.find((s) => s.id === id);
     setSuppliers((prev) => prev.filter((s) => s.id !== id));
     if (target) logActivity('supplier_delete', `حذف مورد: ${target.name}`, { refId: id });
-  }, [suppliers, logActivity]);
+  }, [suppliers, setSuppliers, logActivity]); // Added setSuppliers to deps
 
   const addWarehouse = useCallback((data: Omit<Warehouse, 'id' | 'createdAt'>) => {
     const w: Warehouse = { ...data, id: generateId(), createdAt: Date.now() };
@@ -567,7 +619,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return [w, ...prev];
     });
     logActivity('warehouse_add', `إضافة ${w.type === 'main' ? 'مخزن' : 'معرض'}: ${w.name}`, { refId: w.id });
-  }, [logActivity]);
+  }, [setWarehouses, logActivity]); // Added setWarehouses to deps
 
   const updateWarehouse = useCallback((id: string, data: Partial<Warehouse>) => {
     setWarehouses((prev) => {
@@ -576,7 +628,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return next;
     });
     logActivity('warehouse_edit', `تعديل موقع: ${id}`, { refId: id });
-  }, [logActivity]);
+  }, [setWarehouses, logActivity]); // Added setWarehouses to deps
 
   const deleteWarehouse = useCallback((id: string) => {
     const w = warehouses.find((x) => x.id === id);
@@ -585,9 +637,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (hasStock) return { ok: false, message: 'لا يمكن حذف الموقع لأنه يحتوي على بضاعة' };
     setStocks((prev) => prev.filter((s) => s.warehouseId !== id));
     setWarehouses((prev) => prev.filter((x) => x.id !== id));
-    logActivity('warehouse_delete', `حذف موقع: ${w.name}`, { refId: id });
+    logActivity('warehouse_delete', `حذف موقع: ${w.name}`, { refId: w.id }); // Use w.id here
     return { ok: true };
-  }, [warehouses, stocks, logActivity]);
+  }, [warehouses, stocks, setStocks, setWarehouses, logActivity]); // Added setStocks and setWarehouses to deps
 
   const createSale: StoreContextType['createSale'] = useCallback((input) => {
     if (!input.items.length) return { sale: null, error: 'لا توجد منتجات' };
@@ -617,7 +669,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     logActivity('sale', `بيع #${sale.invoiceNo} بقيمة ${total}`, { amount: total, refId: sale.id });
     return { sale };
-  }, [stocks, warehouses, invoiceCounter, user, logActivity]);
+  }, [stocks, warehouses, invoiceCounter, user, logActivity, setStocks, setProducts, setSales, setInvoiceCounter, setCustomers]); // Added state setters and user to deps
 
   const deleteSale = useCallback((id: string) => {
     setSales((prev) => {
@@ -634,7 +686,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return prev.filter((s) => s.id !== id);
     });
-  }, [stocks, logActivity]);
+  }, [stocks, logActivity, setSales, setStocks, setProducts, setCustomers]); // Added state setters to deps
 
   const createPurchase: StoreContextType['createPurchase'] = useCallback((input) => {
     if (!input.items.length) return { purchase: null, error: 'لا توجد منتجات' };
@@ -659,7 +711,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setPurchaseCounter(newCounter);
     logActivity('purchase', `شراء من ${purchase.supplierName} بقيمة ${total}`, { amount: total, refId: purchase.id });
     return { purchase };
-  }, [stocks, warehouses, purchaseCounter, user, logActivity]);
+  }, [stocks, warehouses, purchaseCounter, user, logActivity, setStocks, setProducts, setPurchases, setPurchaseCounter]); // Added state setters and user to deps
 
   const deletePurchase = useCallback((id: string) => {
     setPurchases((prev) => {
@@ -673,7 +725,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return prev.filter((p) => p.id !== id);
     });
-  }, [stocks, logActivity]);
+  }, [stocks, logActivity, setPurchases, setStocks, setProducts]); // Added state setters to deps
 
   const createTransfer: StoreContextType['createTransfer'] = useCallback((input) => {
     if (!input.items.length) return { transfer: null, error: 'لا توجد منتجات للتحويل' };
@@ -702,7 +754,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setTransferCounter(newCounter);
     logActivity('transfer', `تحويل #${transfer.transferNo} من ${fromW.name} إلى ${toW.name}`, { refId: transfer.id });
     return { transfer };
-  }, [stocks, warehouses, transferCounter, user, logActivity]);
+  }, [stocks, warehouses, transferCounter, user, logActivity, setStocks, setProducts, setTransfers, setTransferCounter]); // Added state setters and user to deps
 
   const deleteTransfer = useCallback((id: string) => {
     setTransfers((prev) => {
@@ -719,7 +771,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return prev.filter((x) => x.id !== id);
     });
-  }, [stocks, logActivity]);
+  }, [stocks, logActivity, setTransfers, setStocks, setProducts]); // Added state setters to deps
 
   const createSaleReturn: StoreContextType['createSaleReturn'] = useCallback((input) => {
     if (!input.items.length) return { ret: null, error: 'لا توجد منتجات' };
@@ -742,7 +794,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (input.saleId) setSales((prev) => prev.map((s) => s.id === input.saleId ? { ...s, hasReturn: true } : s));
     logActivity('sale_return', `مرتجع بيع #${ret.returnNo} بقيمة ${total}`, { amount: total, refId: ret.id });
     return { ret };
-  }, [warehouses, stocks, sales, saleReturnCounter, user, logActivity]);
+  }, [warehouses, stocks, sales, saleReturnCounter, user, logActivity, setStocks, setProducts, setSaleReturns, setSaleReturnCounter, setSales]); // Added state setters and user to deps
 
   const deleteSaleReturn = useCallback((id: string) => {
     setSaleReturns((prev) => {
@@ -752,10 +804,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         for (const item of ret.items) newStocks = adjustStockList(newStocks, item.productId, ret.warehouseId, -item.quantity);
         setStocks(newStocks);
         setProducts((p) => syncProductQuantities(p, newStocks));
+        logActivity('sale_return_delete', `حذف مرتجع بيع #${ret.returnNo}`, { amount: ret.total, refId: ret.id }); // Added log for delete
       }
       return prev.filter((r) => r.id !== id);
     });
-  }, [stocks]);
+  }, [stocks, logActivity, setSaleReturns, setStocks, setProducts]); // Added state setters to deps
 
   const createPurchaseReturn: StoreContextType['createPurchaseReturn'] = useCallback((input) => {
     if (!input.items.length) return { ret: null, error: 'لا توجد منتجات' };
@@ -782,7 +835,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (input.purchaseId) setPurchases((prev) => prev.map((p) => p.id === input.purchaseId ? { ...p, hasReturn: true } : p));
     logActivity('purchase_return', `مرتجع شراء #${ret.returnNo} بقيمة ${total}`, { amount: total, refId: ret.id });
     return { ret };
-  }, [stocks, warehouses, purchases, purchaseReturnCounter, user, logActivity]);
+  }, [stocks, warehouses, purchases, purchaseReturnCounter, user, logActivity, setStocks, setProducts, setPurchaseReturns, setPurchaseReturnCounter, setPurchases]); // Added state setters and user to deps
 
   const deletePurchaseReturn = useCallback((id: string) => {
     setPurchaseReturns((prev) => {
@@ -792,10 +845,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         for (const item of ret.items) newStocks = adjustStockList(newStocks, item.productId, ret.warehouseId, item.quantity);
         setStocks(newStocks);
         setProducts((p) => syncProductQuantities(p, newStocks));
+        logActivity('purchase_return_delete', `حذف مرتجع شراء #${ret.returnNo}`, { amount: ret.total, refId: ret.id }); // Added log for delete
       }
       return prev.filter((r) => r.id !== id);
     });
-  }, [stocks]);
+  }, [stocks, logActivity, setPurchaseReturns, setStocks, setProducts]); // Added state setters to deps
 
   const addExpense = useCallback<StoreContextType['addExpense']>((data) => {
     const exp: Expense = {
@@ -804,19 +858,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
     setExpenses((prev) => [exp, ...prev]);
     logActivity('expense', `مصروف ${exp.category} بقيمة ${exp.amount}`, { amount: exp.amount, refId: exp.id });
-  }, [user, logActivity]);
+  }, [user, logActivity, setExpenses]); // Added setExpenses to deps
 
   const updateExpense = useCallback((id: string, data: Partial<Expense>) => {
     setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, ...data } : e)));
-  }, []);
+    const target = expenses.find((e) => e.id === id); // Added target lookup for log
+    logActivity('expense_edit', `تعديل مصروف ${target?.category || id}`, { refId: id }); // Added log for edit
+  }, [setExpenses, expenses, logActivity]); // Added expenses to deps
 
   const deleteExpense = useCallback((id: string) => {
     const target = expenses.find((e) => e.id === id);
     setExpenses((prev) => prev.filter((e) => e.id !== id));
     if (target) logActivity('expense_delete', `حذف مصروف ${target.category}`, { refId: id });
-  }, [expenses, logActivity]);
+  }, [expenses, setExpenses, logActivity]); // Added setExpenses to deps
 
-  // Customer Payments
   const addCustomerPayment: StoreContextType['addCustomerPayment'] = useCallback((data) => {
     if (!data.customerId) return { payment: null, error: 'يجب اختيار العميل' };
     if (!data.amount || data.amount <= 0) return { payment: null, error: 'المبلغ غير صحيح' };
@@ -838,7 +893,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ));
     logActivity('customer_payment', `دفعة من ${data.customerName} بقيمة ${data.amount}`, { amount: data.amount, refId: payment.id });
     return { payment };
-  }, [customerPaymentCounter, user, logActivity]);
+  }, [customerPaymentCounter, user, logActivity, setCustomerPayments, setCustomerPaymentCounter, setCustomers]); // Added state setters and user to deps
 
   const deleteCustomerPayment = useCallback((id: string) => {
     setCustomerPayments((prev) => {
@@ -851,9 +906,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return prev.filter((p) => p.id !== id);
     });
-  }, [logActivity]);
+  }, [logActivity, setCustomerPayments, setCustomers]); // Added state setters to deps
 
-  // Workers
   const addWorker = useCallback<StoreContextType['addWorker']>((data) => {
     const worker: Worker = {
       ...data,
@@ -863,22 +917,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setWorkers((prev) => [worker, ...prev]);
     logActivity('worker_add', `إضافة عامل: ${worker.name}`, { refId: worker.id });
     return worker;
-  }, [logActivity]);
+  }, [setWorkers, logActivity]); // Added setWorkers to deps
 
   const updateWorker = useCallback((id: string, data: Partial<Worker>) => {
     setWorkers((prev) => prev.map((w) => (w.id === id ? { ...w, ...data } : w)));
     const t = workers.find((w) => w.id === id);
     logActivity('worker_edit', `تعديل عامل: ${t?.name || id}`, { refId: id });
-  }, [workers, logActivity]);
+  }, [workers, setWorkers, logActivity]); // Added setWorkers to deps
 
   const deleteWorker = useCallback((id: string) => {
     const w = workers.find((x) => x.id === id);
     if (!w) return { ok: false, message: 'العامل غير موجود' };
     setWorkers((prev) => prev.filter((x) => x.id !== id));
     setWorkerPayments((prev) => prev.filter((p) => p.workerId !== id));
-    logActivity('worker_delete', `حذف عامل: ${w.name}`, { refId: id });
+    setWorkerAdvances((prev) => prev.filter((p) => p.workerId !== id));
+    logActivity('worker_delete', `حذف عامل: ${w.name}`, { refId: w.id }); // Use w.id here
     return { ok: true };
-  }, [workers, logActivity]);
+  }, [workers, setWorkers, setWorkerPayments, setWorkerAdvances, logActivity]); // Added state setters to deps
 
   const addWorkerPayment: StoreContextType['addWorkerPayment'] = useCallback((data) => {
     const w = workers.find((x) => x.id === data.workerId);
@@ -906,7 +961,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setWorkerPaymentCounter(newCounter);
     logActivity('worker_payment', `قبض ${w.name} بقيمة ${data.amount}`, { amount: data.amount, refId: payment.id });
     return { payment };
-  }, [workers, workerPayments, workerPaymentCounter, user, logActivity]);
+  }, [workers, workerPayments, workerPaymentCounter, user, logActivity, setWorkerPayments, setWorkerPaymentCounter]); // Added state setters and user to deps
 
   const deleteWorkerPayment = useCallback((id: string) => {
     setWorkerPayments((prev) => {
@@ -916,9 +971,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return prev.filter((p) => p.id !== id);
     });
-  }, [logActivity]);
+  }, [logActivity, setWorkerPayments]); // Added setWorkerPayments to deps
 
-  // Notifications
+  const addWorkerAdvance: StoreContextType['addWorkerAdvance'] = useCallback((data) => {
+    const w = workers.find((x) => x.id === data.workerId);
+    if (!w) return { advance: null, error: 'العامل غير موجود' };
+    if (!data.amount || data.amount <= 0) return { advance: null, error: 'المبلغ غير صحيح' };
+    const newCounter = workerAdvanceCounter + 1;
+    const advance: WorkerAdvance = {
+      id: generateId(),
+      workerId: data.workerId,
+      workerName: w.name,
+      type: data.type,
+      amount: data.amount,
+      date: data.date || Date.now(),
+      notes: data.notes || '',
+      userId: user?.id || 'system',
+      userName: user?.name || 'النظام',
+    };
+    setWorkerAdvances((prev) => [advance, ...prev]);
+    setWorkerAdvanceCounter(newCounter);
+    const desc = data.type === 'advance'
+      ? `سلفة لـ ${w.name} بقيمة ${data.amount}`
+      : `تسديد سلفة من ${w.name} بقيمة ${data.amount}`;
+    logActivity(data.type === 'advance' ? 'worker_advance' : 'worker_repayment', desc, { amount: data.amount, refId: advance.id });
+    return { advance };
+  }, [workers, workerAdvanceCounter, user, logActivity, setWorkerAdvances, setWorkerAdvanceCounter]); // Added state setters and user to deps
+
+  const deleteWorkerAdvance = useCallback((id: string) => {
+    setWorkerAdvances((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target) {
+        const type: ActivityType = target.type === 'advance' ? 'worker_advance_delete' : 'worker_repayment_delete';
+        const desc = target.type === 'advance'
+          ? `حذف سلفة ${target.workerName}`
+          : `حذف تسديد سلفة ${target.workerName}`;
+        logActivity(type, desc, { amount: target.amount, refId: id });
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  }, [logActivity, setWorkerAdvances]); // Added setWorkerAdvances to deps
+
   const addNotification = useCallback<StoreContextType['addNotification']>((notif) => {
     const entry: AppNotification = {
       id: generateId(),
@@ -927,35 +1020,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       date: Date.now(),
     };
     setNotifications((prev) => [entry, ...prev].slice(0, 200));
-  }, []);
+  }, [setNotifications]); // Added setNotifications to deps
 
   const markNotificationRead = useCallback((id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-  }, []);
+  }, [setNotifications]); // Added setNotifications to deps
 
   const markAllNotificationsRead = useCallback(() => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  }, []);
+  }, [setNotifications]); // Added setNotifications to deps
 
   const deleteNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
-  }, []);
+  }, [setNotifications]); // Added setNotifications to deps
 
   const updateSettings = useCallback((data: Partial<Settings>) => {
     setSettings((prev) => ({ ...prev, ...data }));
     logActivity('settings_update', 'تحديث الإعدادات');
-  }, [logActivity]);
+  }, [logActivity, setSettings]); // Added setSettings to deps
 
   const resetAll = useCallback(async () => {
     await clearStorage();
     setProducts([]); setCustomers([]); setSuppliers([]); setSales([]); setPurchases([]);
     setWarehouses([]); setStocks([]); setTransfers([]); setSaleReturns([]); setPurchaseReturns([]);
-    setExpenses([]); setCustomerPayments([]); setWorkers([]); setWorkerPayments([]);
+    setExpenses([]); setCustomerPayments([]); setWorkers([]); setWorkerPayments([]); setWorkerAdvances([]);
     setNotifications([]); setActivityLog([]); setSettings(defaultSettings);
     setInvoiceCounter(1000); setPurchaseCounter(1000); setTransferCounter(1000);
     setSaleReturnCounter(1000); setPurchaseReturnCounter(1000);
-    setCustomerPaymentCounter(1000); setWorkerPaymentCounter(1000);
-  }, []);
+    setCustomerPaymentCounter(1000); setWorkerPaymentCounter(1000); setWorkerAdvanceCounter(1000);
+  }, [
+    setProducts, setCustomers, setSuppliers, setSales, setPurchases, setWarehouses, setStocks, setTransfers,
+    setSaleReturns, setPurchaseReturns, setExpenses, setCustomerPayments, setWorkers, setWorkerPayments,
+    setWorkerAdvances, setNotifications, setActivityLog, setSettings, setInvoiceCounter, setPurchaseCounter,
+    setTransferCounter, setSaleReturnCounter, setPurchaseReturnCounter, setCustomerPaymentCounter,
+    setWorkerPaymentCounter, setWorkerAdvanceCounter,
+  ]); // Added all state setters to deps
 
   const unreadNotifications = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -967,11 +1066,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ready, syncing, lastCloudSyncAt,
       products, customers, suppliers, sales, purchases,
       warehouses, stocks, transfers, saleReturns, purchaseReturns, expenses,
-      customerPayments, workers, workerPayments, notifications,
+      customerPayments, workers, workerPayments, workerAdvances, notifications,
       activityLog, settings,
       invoiceCounter, purchaseCounter, transferCounter,
       saleReturnCounter, purchaseReturnCounter,
-      customerPaymentCounter, workerPaymentCounter,
+      customerPaymentCounter, workerPaymentCounter, workerAdvanceCounter,
       unreadNotifications,
       getStock, getTotalStock, defaultMainWarehouseId, syncNow,
       addProduct, updateProduct, deleteProduct,
@@ -985,6 +1084,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       addCustomerPayment, deleteCustomerPayment,
       addWorker, updateWorker, deleteWorker,
       addWorkerPayment, deleteWorkerPayment,
+      addWorkerAdvance, deleteWorkerAdvance,
       addNotification, markNotificationRead, markAllNotificationsRead, deleteNotification,
       updateSettings, resetAll,
     }}>

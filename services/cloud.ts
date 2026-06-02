@@ -18,6 +18,7 @@ export type AppDataBlob = {
   customerPayments: any[];
   workers: any[];
   workerPayments: any[];
+  workerAdvances: any[];
   notifications: any[];
   activityLog: any[];
   settings: any;
@@ -28,6 +29,7 @@ export type AppDataBlob = {
   purchaseReturnCounter: number;
   customerPaymentCounter: number;
   workerPaymentCounter: number;
+  workerAdvanceCounter: number;
 };
 
 export type CloudResult<T> = {
@@ -94,6 +96,7 @@ export async function createAppUserRecord(record: {
   email: string;
   password: string;
   name: string;
+  phone?: string;
   role: string;
   active: boolean;
   status?: string;
@@ -119,4 +122,60 @@ export async function updateAppUserRecord(
 
 export async function deleteAppUserRecord(id: string) {
   return await supabase.from('app_users').delete().eq('id', id);
+}
+
+// ============ Sub-User Authentication via Edge Function ============
+export type SubUserData = {
+  id: string;
+  ownerId: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  status: string;
+  active: boolean;
+  createdAt: string;
+  approvedAt: string | null;
+};
+
+async function invokeSubUserAuth(action: string, payload: Record<string, any>) {
+  try {
+    const { data, error } = await supabase.functions.invoke('sub-user-auth', {
+      body: { action, ...payload },
+    });
+    if (error) {
+      let errorMessage = error.message || 'خطأ في الاتصال';
+      try {
+        const ctx = (error as any).context;
+        if (ctx?.text) {
+          const text = await ctx.text();
+          if (text) errorMessage = text;
+        }
+      } catch {}
+      return { ok: false, message: errorMessage };
+    }
+    return data || { ok: false, message: 'استجابة غير صحيحة' };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || 'فشل الاتصال بالخادم' };
+  }
+}
+
+export async function subUserLogin(phone: string, password: string) {
+  return await invokeSubUserAuth('login', { phone, password });
+}
+
+export async function subUserRequestJoin(phone: string, password: string, name: string) {
+  return await invokeSubUserAuth('request_join', { phone, password, name });
+}
+
+export async function subUserPullData(userId: string) {
+  return await invokeSubUserAuth('pull', { userId });
+}
+
+export async function subUserPushData(userId: string, blob: AppDataBlob) {
+  return await invokeSubUserAuth('push', { userId, blob });
+}
+
+export async function subUserCheckStatus(userId: string) {
+  return await invokeSubUserAuth('check_status', { userId });
 }
