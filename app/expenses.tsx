@@ -23,12 +23,17 @@ export default function ExpensesScreen() {
   const { canEdit } = useAuth();
   const { showAlert } = useAlert();
   const { guard } = useAdminGuard();
+
   const [modalVisible, setModalVisible] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [category, setCategory] = useState('إيجار');
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [filterCat, setFilterCat] = useState<string>('all');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer'>('cash');
+  const today = new Date();
+  const dateText = `${String(today.getDate()).padStart(2, '0')}-${String(today.getMonth() + 1).padStart(2, '0')}-${today.getFullYear()}`;
 
   const filtered = useMemo(() => {
     if (filterCat === 'all') return expenses;
@@ -42,8 +47,10 @@ export default function ExpensesScreen() {
     setCategory('إيجار');
     setAmount('');
     setNotes('');
+    setPaymentMethod('cash');
     setModalVisible(true);
   }
+
   function openEdit(e: Expense) {
     guard({
       title: 'تعديل مصروف',
@@ -57,6 +64,7 @@ export default function ExpensesScreen() {
       },
     });
   }
+
   function handleSubmit() {
     const amt = Number(amount);
     if (!amt || amt <= 0) {
@@ -70,6 +78,7 @@ export default function ExpensesScreen() {
     }
     setModalVisible(false);
   }
+
   function confirmDelete(e: Expense) {
     guard({
       title: 'حذف مصروف',
@@ -82,17 +91,18 @@ export default function ExpensesScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Header
         title="المصروفات"
-        subtitle={`${formatNumber(expenses.length)} مصروف`}
-        right={canEdit ? (
-          <Pressable onPress={openCreate} hitSlop={8} style={styles.headerBtn}>
-            <MaterialCommunityIcons name="plus" size={22} color={Colors.white} />
+        right={
+          <Pressable onPress={() => setMenuVisible(true)} hitSlop={8} style={styles.menuBtn}>
+            <MaterialCommunityIcons name="dots-vertical" size={22} color={Colors.text} />
           </Pressable>
-        ) : null}
+        }
       />
+
       <View style={styles.summary}>
         <Text style={styles.summaryLabel}>إجمالي المصروفات</Text>
         <Text style={styles.summaryValue}>{formatCurrency(total, settings.currency)}</Text>
       </View>
+
       <View style={styles.tabs}>
         <FlatList
           data={['all', ...CATEGORIES]}
@@ -112,11 +122,18 @@ export default function ExpensesScreen() {
           )}
         />
       </View>
+
       <FlatList
         data={filtered}
         keyExtractor={(e) => e.id}
         contentContainerStyle={styles.list}
-        ListEmptyComponent={<EmptyState icon="cash-minus" title="لا توجد مصروفات" description="ابدأ بتسجيل أول مصروف" />}
+        ListEmptyComponent={
+          <EmptyState
+            icon="cash-minus"
+            title="لا توجد مصروفات"
+            description="اضغط + لتسجيل أول مصروف"
+          />
+        }
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={{ flexDirection: 'row-reverse', gap: 6 }}>
@@ -144,31 +161,93 @@ export default function ExpensesScreen() {
           </View>
         )}
       />
+
+      {canEdit ? (
+        <Pressable
+          onPress={openCreate}
+          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        >
+          <MaterialCommunityIcons name="plus" size={28} color={Colors.white} />
+        </Pressable>
+      ) : null}
+
       <Modal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        title={editing ? 'تعديل مصروف' : 'إضافة مصروف'}
+        title={editing ? 'تعديل مصروف' : 'اضافة مصروف جديد'}
         footer={
-          <>
-            <Button title="إلغاء" variant="secondary" onPress={() => setModalVisible(false)} style={{ flex: 1 }} />
-            <Button title="حفظ" onPress={handleSubmit} style={{ flex: 1 }} />
-          </>
+          <Button title="حفظ" onPress={handleSubmit} fullWidth size="lg" />
         }
       >
-        <Text style={styles.fieldLabel}>التصنيف</Text>
+        <Text style={styles.fieldLabel}>جهة الصرف</Text>
         <View style={{ flexDirection: 'row-reverse', flexWrap: 'wrap', gap: Spacing.sm }}>
           {CATEGORIES.map((c) => (
             <Pressable
               key={c}
               onPress={() => setCategory(c)}
-              style={({ pressed }) => [styles.catChip, category === c && styles.catChipActive, pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [
+                styles.catChip,
+                category === c && styles.catChipActive,
+                pressed && { opacity: 0.85 },
+              ]}
             >
               <Text style={[styles.catChipText, category === c && { color: Colors.white }]}>{c}</Text>
             </Pressable>
           ))}
         </View>
-        <Input label="المبلغ" value={amount} onChangeText={setAmount} placeholder="0.00" keyboardType="decimal-pad" />
-        <Input label="ملاحظات" value={notes} onChangeText={setNotes} placeholder="ملاحظات اختيارية" multiline />
+        <Input
+          label="المبلغ"
+          value={amount}
+          onChangeText={setAmount}
+          placeholder="0"
+          keyboardType="decimal-pad"
+        />
+        <View style={styles.dateBox}>
+          <MaterialCommunityIcons name="calendar" size={18} color={Colors.primary} />
+          <Text style={styles.dateText}>{dateText}</Text>
+        </View>
+        <Input
+          label="ملاحظات"
+          value={notes}
+          onChangeText={setNotes}
+          placeholder=""
+          multiline
+          numberOfLines={4}
+          style={{ minHeight: 100, textAlignVertical: 'top' }}
+        />
+        <View style={styles.payRow}>
+          <Pressable
+            onPress={() => setPaymentMethod('cash')}
+            style={[
+              styles.payChip,
+              paymentMethod === 'cash' && styles.payChipActive,
+            ]}
+          >
+            <Text style={[styles.payChipText, paymentMethod === 'cash' && { color: Colors.white }]}>كاش</Text>
+          </Pressable>
+          <Text style={styles.payLabel}>الدفع:</Text>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        title="خيارات"
+      >
+        <Pressable
+          onPress={() => { setMenuVisible(false); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>عرض المصروفات</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMenuVisible(false); openCreate(); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>إضافة مصروف جديد</Text>
+        </Pressable>
       </Modal>
     </SafeAreaView>
   );
@@ -176,25 +255,117 @@ export default function ExpensesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  headerBtn: { backgroundColor: Colors.primary, width: 40, height: 40, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
-  summary: { backgroundColor: Colors.danger, padding: Spacing.lg, marginHorizontal: Spacing.lg, marginTop: Spacing.lg, borderRadius: Radius.lg, alignItems: 'flex-end' },
+  menuBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  summary: {
+    backgroundColor: Colors.danger,
+    padding: Spacing.lg,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    borderRadius: Radius.lg,
+    alignItems: 'flex-end',
+    ...Shadow.sm,
+  },
   summaryLabel: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.sm },
   summaryValue: { color: Colors.white, fontSize: FontSize.xxl, fontWeight: FontWeight.bold, marginTop: 4 },
   tabs: { paddingVertical: Spacing.md },
-  chip: { paddingHorizontal: Spacing.md, paddingVertical: 8, borderRadius: Radius.full, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border, minHeight: 36, justifyContent: 'center' },
+  chip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
   chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   chipText: { color: Colors.text, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
   chipTextActive: { color: Colors.white },
-  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
-  card: { backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg, borderWidth: 1, borderColor: Colors.border, marginBottom: Spacing.md, flexDirection: 'row-reverse', alignItems: 'flex-start', ...Shadow.sm },
-  actBtn: { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
-  catTag: { backgroundColor: Colors.dangerSoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full },
+  list: { padding: Spacing.lg, paddingTop: 0, paddingBottom: 120, gap: Spacing.md },
+  card: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: Spacing.md,
+    flexDirection: 'row-reverse',
+    alignItems: 'flex-start',
+    ...Shadow.sm,
+  },
+  actBtn: {
+    width: 36, height: 36, borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceAlt,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  catTag: {
+    backgroundColor: Colors.dangerSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
+  },
   catText: { color: Colors.danger, fontWeight: FontWeight.semibold, fontSize: FontSize.xs },
   amount: { color: Colors.danger, fontSize: FontSize.xl, fontWeight: FontWeight.bold, marginTop: 4 },
   notes: { color: Colors.textSecondary, fontSize: FontSize.sm, marginTop: 4, textAlign: 'right' },
   metaRow: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 4 },
-  fieldLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right' },
-  catChip: { paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.md,
+  },
+  fieldLabel: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right' },
+  catChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surfaceAlt,
+  },
   catChipActive: { backgroundColor: Colors.primary },
   catChipText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  dateBox: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    paddingVertical: 14,
+  },
+  dateText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+  payRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: Spacing.md,
+  },
+  payLabel: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  payChip: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.surface,
+  },
+  payChipActive: { backgroundColor: Colors.primary },
+  payChipText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: FontWeight.bold },
+  menuRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  menuLabel: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
 });

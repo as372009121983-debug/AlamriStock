@@ -10,20 +10,26 @@ import { Header } from '@/components/ui/Header';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { PhoneField } from '@/components/ui/PhoneField';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
 import { Customer } from '@/constants/types';
 import { formatCurrency, formatNumber } from '@/services/format';
 
+const CATEGORIES = ['عملاء قطاعي', 'جملة', 'جملة خاصة', 'مقاولين', 'متاجر', 'أخرى'];
+
 type FormState = {
   name: string;
   phone: string;
   address: string;
   debt: string;
+  category: string;
+  maxDebt: string;
+  notes: string;
 };
 
-const empty: FormState = { name: '', phone: '', address: '', debt: '0' };
+const empty: FormState = { name: '', phone: '', address: '', debt: '0', category: '', maxDebt: '', notes: '' };
 
 export default function CustomersScreen() {
   const router = useRouter();
@@ -32,6 +38,7 @@ export default function CustomersScreen() {
 
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
+  const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState<FormState>(empty);
   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
@@ -39,10 +46,8 @@ export default function CustomersScreen() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return customers;
-    return customers.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.phone.toLowerCase().includes(q)
+    return customers.filter((c) =>
+      c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)
     );
   }, [customers, search]);
 
@@ -59,7 +64,15 @@ export default function CustomersScreen() {
       description: `أدخل كلمة مرور المدير لتعديل "${c.name}"`,
       action: () => {
         setEditing(c);
-        setForm({ name: c.name, phone: c.phone, address: c.address, debt: String(c.debt) });
+        setForm({
+          name: c.name,
+          phone: c.phone,
+          address: c.address,
+          debt: String(c.debt),
+          category: c.category || '',
+          maxDebt: c.maxDebt ? String(c.maxDebt) : '',
+          notes: c.notes || '',
+        });
         setErrors({});
         setModalVisible(true);
       },
@@ -68,7 +81,7 @@ export default function CustomersScreen() {
 
   function handleSubmit() {
     const next: Partial<Record<keyof FormState, string>> = {};
-    if (!form.name.trim()) next.name = 'الاسم مطلوب';
+    if (!form.name.trim()) next.name = 'اسم العميل مطلوب';
     setErrors(next);
     if (Object.keys(next).length) return;
     const data = {
@@ -76,6 +89,9 @@ export default function CustomersScreen() {
       phone: form.phone.trim(),
       address: form.address.trim(),
       debt: Number(form.debt) || 0,
+      category: form.category.trim() || undefined,
+      maxDebt: form.maxDebt ? Number(form.maxDebt) : undefined,
+      notes: form.notes.trim() || undefined,
     };
     if (editing) updateCustomer(editing.id, data);
     else addCustomer(data);
@@ -92,22 +108,9 @@ export default function CustomersScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <Header
-        title="العملاء"
-        subtitle={`${formatNumber(customers.length)} عميل`}
-        showBack={false}
-        right={
-          <Pressable onPress={openCreate} hitSlop={8} style={styles.headerBtn}>
-            <MaterialCommunityIcons name="plus" size={22} color={Colors.white} />
-          </Pressable>
-        }
-      />
+      <Header title="العملاء" />
       <View style={styles.toolbar}>
-        <SearchBar
-          value={search}
-          onChangeText={setSearch}
-          placeholder="بحث بالاسم أو الهاتف..."
-        />
+        <SearchBar value={search} onChangeText={setSearch} placeholder="ادخل اسم العميل" />
       </View>
       <FlatList
         data={filtered}
@@ -115,9 +118,8 @@ export default function CustomersScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <EmptyState
-            icon="account-group-outline"
-            title="لا يوجد عملاء"
-            description="أضف عملاءك لتتبع مشترياتهم وحساباتهم"
+            icon="account-search"
+            title="لا يوجد عملاء قم باضافة عميل جديد"
           />
         }
         renderItem={({ item }) => (
@@ -125,66 +127,36 @@ export default function CustomersScreen() {
             onPress={() => router.push(`/customer/${item.id}` as any)}
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
           >
-            <View style={styles.cardTop}>
-              <View style={styles.actions}>
-                <Pressable
-                  onPress={() => confirmDelete(item)}
-                  hitSlop={8}
-                  style={({ pressed }) => [styles.actBtn, pressed && { opacity: 0.7 }]}
-                >
-                  <MaterialCommunityIcons
-                    name="trash-can-outline"
-                    size={18}
-                    color={Colors.danger}
-                  />
-                </Pressable>
-                <Pressable
-                  onPress={() => openEdit(item)}
-                  hitSlop={8}
-                  style={({ pressed }) => [styles.actBtn, pressed && { opacity: 0.7 }]}
-                >
+            <View style={styles.cardRow}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
+              </View>
+              <View style={{ flex: 1, marginRight: Spacing.md, alignItems: 'flex-end' }}>
+                <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+                {item.phone ? (
+                  <View style={styles.metaRow}>
+                    <Text style={styles.metaText}>{item.phone}</Text>
+                    <MaterialCommunityIcons name="phone-outline" size={14} color={Colors.textMuted} />
+                  </View>
+                ) : null}
+                {item.category ? (
+                  <View style={styles.catTag}>
+                    <Text style={styles.catText}>{item.category}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.cardActions}>
+                <Pressable onPress={() => openEdit(item)} hitSlop={8} style={styles.iconBtn}>
                   <MaterialCommunityIcons name="pencil-outline" size={18} color={Colors.info} />
                 </Pressable>
-              </View>
-              <View style={styles.headRow}>
-                <View style={{ alignItems: 'flex-end', flex: 1 }}>
-                  <Text style={styles.cardTitle} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  {item.phone ? (
-                    <View style={styles.metaRow}>
-                      <Text style={styles.metaText}>{item.phone}</Text>
-                      <MaterialCommunityIcons
-                        name="phone-outline"
-                        size={14}
-                        color={Colors.textMuted}
-                      />
-                    </View>
-                  ) : null}
-                </View>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
-                </View>
+                <Pressable onPress={() => confirmDelete(item)} hitSlop={8} style={styles.iconBtn}>
+                  <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
+                </Pressable>
               </View>
             </View>
-            {item.address ? (
-              <View style={styles.metaRow}>
-                <Text style={[styles.metaText, { flex: 1, textAlign: 'right' }]} numberOfLines={1}>
-                  {item.address}
-                </Text>
-                <MaterialCommunityIcons
-                  name="map-marker-outline"
-                  size={14}
-                  color={Colors.textMuted}
-                />
-              </View>
-            ) : null}
             <View style={styles.debtRow}>
               <Text
-                style={[
-                  styles.debtValue,
-                  { color: item.debt > 0 ? Colors.danger : Colors.success },
-                ]}
+                style={[styles.debtValue, { color: item.debt > 0 ? Colors.danger : Colors.success }]}
               >
                 {formatCurrency(item.debt, settings.currency)}
               </Text>
@@ -194,49 +166,133 @@ export default function CustomersScreen() {
         )}
       />
 
+      <Pressable
+        onPress={openCreate}
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+      >
+        <MaterialCommunityIcons name="plus" size={28} color={Colors.white} />
+      </Pressable>
+
       <Modal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        title={editing ? 'تعديل عميل' : 'إضافة عميل'}
+        title={editing ? 'تعديل عميل' : 'اضافة عميل جديد'}
         footer={
-          <>
-            <Button
-              title="إلغاء"
-              variant="secondary"
-              onPress={() => setModalVisible(false)}
-              style={{ flex: 1 }}
-            />
-            <Button title="حفظ" onPress={handleSubmit} style={{ flex: 1 }} />
-          </>
+          <Button
+            title="حفظ"
+            onPress={handleSubmit}
+            fullWidth
+            size="lg"
+          />
         }
       >
+        {!editing ? (
+          <Pressable
+            onPress={() => router.push('/import-contacts')}
+            style={styles.contactLink}
+          >
+            <MaterialCommunityIcons name="contacts-outline" size={18} color={Colors.primary} />
+            <Text style={styles.contactLinkText}>إضافة من جهات الاتصال</Text>
+          </Pressable>
+        ) : null}
         <Input
-          label="الاسم"
+          label="اسم العميل"
           value={form.name}
           onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
-          placeholder="اسم العميل"
+          placeholder="اسم العميل (مطلوب)"
           error={errors.name}
         />
-        <Input
+        <PhoneField
           label="رقم الهاتف"
           value={form.phone}
           onChangeText={(t) => setForm((p) => ({ ...p, phone: t }))}
-          placeholder="01xxxxxxxxx"
-          keyboardType="phone-pad"
+          placeholder="رقم الهاتف"
         />
         <Input
           label="العنوان"
           value={form.address}
           onChangeText={(t) => setForm((p) => ({ ...p, address: t }))}
-          placeholder="العنوان التفصيلي"
+          placeholder="العنوان"
         />
+
+        <View>
+          <Text style={styles.fieldLabel}>التصنيف</Text>
+          <Pressable
+            onPress={() => setCategoryPickerVisible(true)}
+            style={styles.pickerField}
+          >
+            <MaterialCommunityIcons name="chevron-down" size={20} color={Colors.textMuted} />
+            <Text style={[styles.pickerValue, !form.category && { color: Colors.textMuted }]}>
+              {form.category || 'التصنيف'}
+            </Text>
+          </Pressable>
+        </View>
+
         <Input
-          label="المديونية"
-          value={form.debt}
-          onChangeText={(t) => setForm((p) => ({ ...p, debt: t }))}
-          placeholder="0"
+          label="اقصي حد للمديونية"
+          value={form.maxDebt}
+          onChangeText={(t) => setForm((p) => ({ ...p, maxDebt: t }))}
+          placeholder="بدون حد"
           keyboardType="decimal-pad"
         />
+
+        <Input
+          label="ملاحظات"
+          value={form.notes}
+          onChangeText={(t) => setForm((p) => ({ ...p, notes: t }))}
+          placeholder="ملاحظات اختيارية"
+          multiline
+          numberOfLines={3}
+          style={{ minHeight: 80, textAlignVertical: 'top' }}
+        />
+
+        {editing ? (
+          <Input
+            label="المديونية الحالية"
+            value={form.debt}
+            onChangeText={(t) => setForm((p) => ({ ...p, debt: t }))}
+            placeholder="0"
+            keyboardType="decimal-pad"
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        visible={categoryPickerVisible}
+        onClose={() => setCategoryPickerVisible(false)}
+        title="اختر التصنيف"
+      >
+        <Pressable
+          onPress={() => {
+            setForm((p) => ({ ...p, category: '' }));
+            setCategoryPickerVisible(false);
+          }}
+          style={styles.pickerRow}
+        >
+          <MaterialCommunityIcons
+            name={!form.category ? 'check-circle' : 'circle-outline'}
+            size={22}
+            color={!form.category ? Colors.primary : Colors.textMuted}
+          />
+          <Text style={styles.pickerRowText}>بدون تصنيف</Text>
+        </Pressable>
+        {CATEGORIES.map((cat) => (
+          <Pressable
+            key={cat}
+            onPress={() => {
+              setForm((p) => ({ ...p, category: cat }));
+              setCategoryPickerVisible(false);
+            }}
+            style={styles.pickerRow}
+          >
+            <MaterialCommunityIcons
+              name={form.category === cat ? 'check-circle' : 'circle-outline'}
+              size={22}
+              color={form.category === cat ? Colors.primary : Colors.textMuted}
+            />
+            <Text style={styles.pickerRowText}>{cat}</Text>
+          </Pressable>
+        ))}
       </Modal>
     </SafeAreaView>
   );
@@ -251,16 +307,8 @@ function getInitials(name: string): string {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  headerBtn: {
-    backgroundColor: Colors.primary,
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
-  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
+  list: { padding: Spacing.lg, paddingTop: 0, paddingBottom: 120 },
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
@@ -270,54 +318,26 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     ...Shadow.sm,
   },
-  cardTop: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: Spacing.md,
-  },
-  headRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: Spacing.md,
-    flex: 1,
-    marginRight: Spacing.md,
-  },
+  cardRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: Spacing.md },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.full,
+    width: 48, height: 48, borderRadius: Radius.full,
     backgroundColor: Colors.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
-  avatarText: {
-    color: Colors.primary,
-    fontWeight: FontWeight.bold,
-    fontSize: FontSize.md,
-  },
-  cardTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: FontWeight.bold,
-    color: Colors.text,
-    textAlign: 'right',
-  },
-  actions: { flexDirection: 'row-reverse', gap: Spacing.sm },
-  actBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metaRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
-  },
+  avatarText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.md },
+  cardTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
+  metaRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 6, marginTop: 4 },
   metaText: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  catTag: {
+    marginTop: 6,
+    backgroundColor: Colors.primarySoft,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+  },
+  catText: { color: Colors.primary, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
+  cardActions: { flexDirection: 'row-reverse', gap: 6 },
+  iconBtn: { width: 32, height: 32, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
   debtRow: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
@@ -330,4 +350,47 @@ const styles = StyleSheet.create({
   },
   debtLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
   debtValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.md,
+  },
+  contactLink: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  contactLinkText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  fieldLabel: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium, marginBottom: 8, textAlign: 'right' },
+  pickerField: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 14,
+    minHeight: 52,
+    gap: 8,
+  },
+  pickerValue: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
+  pickerRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  pickerRowText: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
 });

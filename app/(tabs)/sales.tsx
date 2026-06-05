@@ -9,6 +9,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAdminGuard } from '@/hooks/useAdminGuard';
 import { Header } from '@/components/ui/Header';
 import { SearchBar } from '@/components/ui/SearchBar';
+import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
 import { formatCurrency, formatDateTime, formatNumber, isSameDay } from '@/services/format';
@@ -20,6 +21,7 @@ export default function SalesScreen() {
   const { guard } = useAdminGuard();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'today' | 'returned'>('all');
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -40,7 +42,6 @@ export default function SalesScreen() {
     return list;
   }, [sales, search, filter]);
 
-  // Sales total (excluding returns)
   const totals = useMemo(() => {
     const totalReturns = saleReturns.reduce((s, r) => s + r.total, 0);
     const total = filtered.reduce((s, sa) => s + sa.total, 0);
@@ -59,46 +60,38 @@ export default function SalesScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Header
         title="المبيعات"
-        subtitle={`${formatNumber(sales.length)} فاتورة`}
-        showBack={false}
         right={
-          canEdit ? (
-            <Pressable
-              onPress={() => router.push('/new-sale')}
-              hitSlop={8}
-              style={styles.headerBtn}
-            >
-              <MaterialCommunityIcons name="plus" size={22} color={Colors.white} />
-            </Pressable>
-          ) : null
+          <Pressable
+            onPress={() => setMenuVisible(true)}
+            hitSlop={8}
+            style={styles.menuBtn}
+          >
+            <MaterialCommunityIcons name="dots-vertical" size={22} color={Colors.text} />
+          </Pressable>
         }
       />
+      <View style={styles.toolbar}>
+        <SearchBar
+          value={search}
+          onChangeText={setSearch}
+          placeholder="ابحث برقم الفاتورة أو العميل"
+        />
+      </View>
+
       <View style={styles.summary}>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryLabel}>إجمالي المبيعات</Text>
           <Text style={styles.summaryValue}>
             {formatCurrency(totals.total, settings.currency)}
           </Text>
-          <Text style={styles.returnsHint}>
-            * المرتجعات منفصلة ({formatCurrency(totals.totalReturns, settings.currency)})
-          </Text>
         </View>
-        <View style={[styles.summaryCard, { backgroundColor: Colors.primary }]}>
-          <Text style={[styles.summaryLabel, { color: 'rgba(255,255,255,0.85)' }]}>
-            عدد الفواتير
-          </Text>
-          <Text style={[styles.summaryValue, { color: Colors.white }]}>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>عدد الفواتير</Text>
+          <Text style={[styles.summaryValue, { color: Colors.primary }]}>
             {formatNumber(totals.count)}
           </Text>
         </View>
-      </View>
-
-      <View style={styles.toolbar}>
-        <SearchBar
-          value={search}
-          onChangeText={setSearch}
-          placeholder="بحث بالعميل أو رقم الفاتورة..."
-        />
       </View>
 
       <View style={styles.tabs}>
@@ -113,9 +106,9 @@ export default function SalesScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <EmptyState
-            icon="cart-outline"
+            icon="receipt-text-outline"
             title="لا توجد فواتير"
-            description="ابدأ بإنشاء أول فاتورة بيع"
+            description="اضغط + لإنشاء أول فاتورة بيع"
           />
         }
         renderItem={({ item }) => (
@@ -123,7 +116,7 @@ export default function SalesScreen() {
             onPress={() => router.push(`/invoice/${item.id}` as any)}
             style={({ pressed }) => [
               styles.card,
-              item.hasReturn && { borderColor: Colors.danger, backgroundColor: '#FFFBFB' },
+              item.hasReturn && { borderColor: Colors.danger },
               pressed && { opacity: 0.85 },
             ]}
           >
@@ -132,51 +125,30 @@ export default function SalesScreen() {
                 <Pressable
                   onPress={() => confirmDelete(item.id, item.invoiceNo)}
                   hitSlop={8}
-                  style={({ pressed }) => [styles.actBtn, pressed && { opacity: 0.7 }]}
+                  style={styles.actBtn}
                 >
-                  <MaterialCommunityIcons
-                    name="trash-can-outline"
-                    size={18}
-                    color={Colors.danger}
-                  />
+                  <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
                 </Pressable>
               ) : <View style={styles.actBtn} />}
               <View style={{ flex: 1, alignItems: 'flex-end' }}>
                 <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
-                  <Text style={styles.invoiceNo}>فاتورة #{item.invoiceNo}</Text>
+                  <Text style={styles.invoiceNo}>#{item.invoiceNo}</Text>
                   {item.hasReturn ? (
                     <View style={styles.returnBadge}>
                       <Text style={styles.returnBadgeText}>مرتجع</Text>
                     </View>
                   ) : null}
                 </View>
-                <Text style={styles.customer} numberOfLines={1}>
-                  {item.customerName}
-                </Text>
-                {item.warehouseName ? (
-                  <Text style={styles.warehouse}>{item.warehouseName}</Text>
-                ) : null}
+                <Text style={styles.customer} numberOfLines={1}>{item.customerName}</Text>
               </View>
             </View>
             <View style={styles.cardMid}>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>العناصر</Text>
-                <Text style={styles.detailValue}>
-                  {formatNumber(item.items.length)} منتج
-                </Text>
-              </View>
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>الخصم</Text>
-                <Text style={styles.detailValue}>
-                  {formatCurrency(item.discount, settings.currency)}
-                </Text>
-              </View>
-              <View style={[styles.detailRow, styles.totalRow]}>
-                <Text style={styles.totalLabel}>الإجمالي</Text>
-                <Text style={styles.totalValue}>
-                  {formatCurrency(item.total, settings.currency)}
-                </Text>
-              </View>
+              <Text style={styles.totalValue}>
+                {formatCurrency(item.total, settings.currency)}
+              </Text>
+              <Text style={styles.itemsLabel}>
+                {formatNumber(item.items.length)} منتج
+              </Text>
             </View>
             <View style={styles.cardBottom}>
               <Text style={styles.user}>{item.userName || '—'}</Text>
@@ -185,6 +157,50 @@ export default function SalesScreen() {
           </Pressable>
         )}
       />
+
+      {canEdit ? (
+        <Pressable
+          onPress={() => router.push('/new-sale')}
+          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        >
+          <MaterialCommunityIcons name="plus" size={28} color={Colors.white} />
+        </Pressable>
+      ) : null}
+
+      <Modal
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        title="خيارات"
+      >
+        <Pressable
+          onPress={() => { setMenuVisible(false); router.push('/new-sale'); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>فاتورة بيع جديدة</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMenuVisible(false); router.push('/returns'); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>فواتير المرتجع</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMenuVisible(false); router.push('/reports'); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>عروض الاسعار</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMenuVisible(false); router.push('/(tabs)/products' as any); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>تغيير سعر البيع الافتراضي</Text>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -202,44 +218,28 @@ function FilterChip({ label, active, onPress }: { label: string; active: boolean
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  headerBtn: {
-    backgroundColor: Colors.primary,
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  menuBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   summary: {
     flexDirection: 'row-reverse',
-    gap: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.lg,
-  },
-  summaryCard: {
-    flex: 1,
     backgroundColor: Colors.surface,
+    marginHorizontal: Spacing.lg,
     borderRadius: Radius.lg,
-    padding: Spacing.lg,
+    padding: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    alignItems: 'flex-end',
     ...Shadow.sm,
   },
-  summaryLabel: { fontSize: FontSize.sm, color: Colors.textSecondary },
-  summaryValue: {
-    fontSize: FontSize.xl,
-    fontWeight: FontWeight.bold,
-    color: Colors.text,
-    marginTop: 6,
-  },
-  returnsHint: { fontSize: 10, color: Colors.danger, marginTop: 4 },
-  toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  summaryCard: { flex: 1, alignItems: 'center' },
+  summaryDivider: { width: 1, backgroundColor: Colors.border },
+  summaryLabel: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  summaryValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text, marginTop: 4 },
   tabs: {
     flexDirection: 'row-reverse',
     gap: Spacing.sm,
     paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.md,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
   },
   chip: {
     paddingHorizontal: Spacing.lg,
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   chipText: { color: Colors.text, fontWeight: FontWeight.medium, fontSize: FontSize.sm },
   chipTextActive: { color: Colors.white },
-  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
+  list: { padding: Spacing.lg, paddingTop: 0, paddingBottom: 120, gap: Spacing.md },
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
@@ -270,41 +270,25 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   actBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
+    width: 36, height: 36, borderRadius: Radius.full,
     backgroundColor: Colors.surfaceAlt,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
   invoiceNo: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.semibold },
-  returnBadge: {
-    backgroundColor: Colors.dangerSoft,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: Radius.sm,
-  },
+  returnBadge: { backgroundColor: Colors.dangerSoft, paddingHorizontal: 6, paddingVertical: 2, borderRadius: Radius.sm },
   returnBadgeText: { color: Colors.danger, fontSize: 10, fontWeight: FontWeight.bold },
   customer: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text, marginTop: 4 },
-  warehouse: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   cardMid: {
+    flexDirection: 'row-reverse',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     backgroundColor: Colors.surfaceAlt,
     borderRadius: Radius.md,
     padding: Spacing.md,
     marginTop: Spacing.md,
-    gap: 6,
   },
-  detailRow: { flexDirection: 'row-reverse', justifyContent: 'space-between' },
-  detailLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
-  detailValue: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  totalRow: {
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    marginTop: 4,
-  },
-  totalLabel: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.semibold },
-  totalValue: { color: Colors.primary, fontSize: FontSize.lg, fontWeight: FontWeight.bold },
+  totalValue: { color: Colors.primary, fontSize: FontSize.xl, fontWeight: FontWeight.bold },
+  itemsLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
   cardBottom: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
@@ -312,4 +296,26 @@ const styles = StyleSheet.create({
   },
   user: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.semibold },
   date: { fontSize: FontSize.xs, color: Colors.textMuted },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.md,
+  },
+  menuRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  menuLabel: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
 });

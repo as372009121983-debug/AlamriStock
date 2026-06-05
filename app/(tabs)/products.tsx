@@ -1,6 +1,6 @@
 // Powered by OnSpace.AI
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -21,6 +21,8 @@ import { Product, ProductPrice } from '@/constants/types';
 import { formatCurrency, formatNumber, generateId } from '@/services/format';
 import { uploadImages } from '@/services/imageUpload';
 
+const UNITS = ['قطعة', 'كرتون', 'متر', 'كجم', 'لتر', 'علبة'];
+
 type FormState = {
   name: string;
   barcode: string;
@@ -37,30 +39,16 @@ type FormState = {
 };
 
 const emptyForm: FormState = {
-  name: '',
-  barcode: '',
-  category: '',
-  unit: 'قطعة',
-  purchasePrice: '',
-  salePrice: '',
-  quantity: '',
-  lowStockAlert: '5',
-  warehouseId: '',
-  prices: [],
-  images: [],
-  notes: '',
+  name: '', barcode: '', category: '', unit: 'قطعة',
+  purchasePrice: '', salePrice: '', quantity: '',
+  lowStockAlert: '5', warehouseId: '',
+  prices: [], images: [], notes: '',
 };
 
 export default function ProductsScreen() {
   const {
-    products,
-    warehouses,
-    addProduct,
-    updateProduct,
-    deleteProduct,
-    settings,
-    defaultMainWarehouseId,
-    getStock,
+    products, warehouses, addProduct, updateProduct, deleteProduct,
+    settings, defaultMainWarehouseId,
   } = useStore();
   const { canEdit, user } = useAuth();
   const { showAlert } = useAlert();
@@ -68,11 +56,17 @@ export default function ProductsScreen() {
   const params = useLocalSearchParams<{ new?: string }>();
 
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'qty' | 'price'>('name');
+  const [sortAsc, setSortAsc] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
+  const [unitPickerVisible, setUnitPickerVisible] = useState(false);
+  const [showPrices, setShowPrices] = useState(false);
+  const [showBarcode, setShowBarcode] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
-  const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const mainWarehouses = warehouses.filter((w) => w.type === 'main');
@@ -86,14 +80,25 @@ export default function ProductsScreen() {
     let list = products;
     if (q) {
       list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
+        (p) => p.name.toLowerCase().includes(q) ||
           p.barcode.toLowerCase().includes(q) ||
           (p.category || '').toLowerCase().includes(q)
       );
     }
+    list = [...list].sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === 'name') cmp = a.name.localeCompare(b.name);
+      else if (sortBy === 'qty') cmp = a.quantity - b.quantity;
+      else if (sortBy === 'price') cmp = a.salePrice - b.salePrice;
+      return sortAsc ? cmp : -cmp;
+    });
     return list;
-  }, [products, search]);
+  }, [products, search, sortBy, sortAsc]);
+
+  function toggleSort(field: typeof sortBy) {
+    if (sortBy === field) setSortAsc(!sortAsc);
+    else { setSortBy(field); setSortAsc(true); }
+  }
 
   function openCreate() {
     if (mainWarehouses.length === 0) {
@@ -103,6 +108,9 @@ export default function ProductsScreen() {
     setEditing(null);
     setForm({ ...emptyForm, warehouseId: defaultMainWarehouseId || mainWarehouses[0].id });
     setErrors({});
+    setShowPrices(false);
+    setShowBarcode(false);
+    setShowDetails(false);
     setModalVisible(true);
   }
 
@@ -113,20 +121,18 @@ export default function ProductsScreen() {
       action: () => {
         setEditing(product);
         setForm({
-          name: product.name,
-          barcode: product.barcode,
-          category: product.category || '',
-          unit: product.unit || 'قطعة',
-          purchasePrice: String(product.purchasePrice),
-          salePrice: String(product.salePrice),
-          quantity: String(product.quantity),
-          lowStockAlert: String(product.lowStockAlert),
+          name: product.name, barcode: product.barcode,
+          category: product.category || '', unit: product.unit || 'قطعة',
+          purchasePrice: String(product.purchasePrice), salePrice: String(product.salePrice),
+          quantity: String(product.quantity), lowStockAlert: String(product.lowStockAlert),
           warehouseId: defaultMainWarehouseId || '',
-          prices: product.prices || [],
-          images: product.images || [],
+          prices: product.prices || [], images: product.images || [],
           notes: product.notes || '',
         });
         setErrors({});
+        setShowPrices((product.prices || []).length > 0);
+        setShowBarcode(!!product.barcode);
+        setShowDetails(!!(product.category || product.notes || (product.images || []).length));
         setModalVisible(true);
       },
     });
@@ -140,8 +146,7 @@ export default function ProductsScreen() {
         return;
       }
       const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.6,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.6,
       });
       if (!res.canceled && res.assets[0]) {
         setForm((p) => ({ ...p, images: [...p.images, res.assets[0].uri] }));
@@ -154,7 +159,7 @@ export default function ProductsScreen() {
   function addCustomPrice() {
     setForm((p) => ({
       ...p,
-      prices: [...p.prices, { id: generateId(), label: 'سعر جديد', price: 0 }],
+      prices: [...p.prices, { id: generateId(), label: 'جملة', price: 0 }],
     }));
   }
 
@@ -171,12 +176,9 @@ export default function ProductsScreen() {
 
   async function handleSubmit() {
     const next: Record<string, string> = {};
-    if (!form.name.trim()) next.name = 'الاسم مطلوب';
-    if (!form.salePrice || isNaN(Number(form.salePrice))) next.salePrice = 'سعر بيع غير صحيح';
-    if (!form.purchasePrice || isNaN(Number(form.purchasePrice)))
-      next.purchasePrice = 'سعر شراء غير صحيح';
-    if (form.quantity === '' || isNaN(Number(form.quantity))) next.quantity = 'كمية غير صحيحة';
-    if (!editing && !form.warehouseId) next.warehouseId = 'اختر مخزن';
+    if (!form.name.trim()) next.name = 'اسم المنتج مطلوب';
+    if (form.salePrice && isNaN(Number(form.salePrice))) next.salePrice = 'سعر بيع غير صحيح';
+    if (form.purchasePrice && isNaN(Number(form.purchasePrice))) next.purchasePrice = 'سعر شراء غير صحيح';
     setErrors(next);
     if (Object.keys(next).length) return;
 
@@ -186,7 +188,7 @@ export default function ProductsScreen() {
       const result = await uploadImages(form.images, user.id, 'products');
       setUploading(false);
       if (result.failed > 0) {
-        showAlert('تنبيه', `فشل رفع ${result.failed} صورة. سيتم حفظ المنتج بالصور المرفوعة فقط.`);
+        showAlert('تنبيه', `فشل رفع ${result.failed} صورة`);
       }
       finalImages = result.urls;
     }
@@ -196,8 +198,8 @@ export default function ProductsScreen() {
       barcode: form.barcode.trim(),
       category: form.category.trim(),
       unit: form.unit.trim() || 'قطعة',
-      purchasePrice: Number(form.purchasePrice),
-      salePrice: Number(form.salePrice),
+      purchasePrice: Number(form.purchasePrice) || 0,
+      salePrice: Number(form.salePrice) || 0,
       lowStockAlert: Number(form.lowStockAlert) || 0,
       prices: form.prices.filter((p) => p.label.trim()),
       images: finalImages,
@@ -208,11 +210,8 @@ export default function ProductsScreen() {
       updateProduct(editing.id, payload);
       setModalVisible(false);
     } else {
-      const res = addProduct(payload, form.warehouseId, Number(form.quantity));
-      if (!res.ok) {
-        showAlert('خطأ', res.message || 'تعذر الإضافة');
-        return;
-      }
+      const res = addProduct(payload, form.warehouseId, Number(form.quantity) || 0);
+      if (!res.ok) { showAlert('خطأ', res.message || ''); return; }
       setModalVisible(false);
     }
   }
@@ -227,318 +226,283 @@ export default function ProductsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <Header
-        title="المنتجات"
-        subtitle={`${formatNumber(products.length)} منتج`}
-        showBack={false}
-        right={
-          canEdit ? (
-            <Pressable onPress={openCreate} hitSlop={8} style={styles.headerBtn}>
-              <MaterialCommunityIcons name="plus" size={22} color={Colors.white} />
-            </Pressable>
-          ) : null
-        }
-      />
+      <Header title="المنتجات" />
       <View style={styles.toolbar}>
-        <SearchBar
-          value={search}
-          onChangeText={setSearch}
-          placeholder="بحث بالاسم أو الباركود أو الفئة..."
-        />
+        <SearchBar value={search} onChangeText={setSearch} placeholder="اسم المنتج" />
       </View>
+
+      <View style={styles.tableHeader}>
+        <Pressable onPress={() => toggleSort('price')} style={styles.thBtn}>
+          <Text style={styles.thText}>السعر</Text>
+          <MaterialCommunityIcons name="swap-vertical" size={14} color={Colors.primary} />
+        </Pressable>
+        <Pressable onPress={() => toggleSort('qty')} style={styles.thBtn}>
+          <Text style={styles.thText}>الكمية</Text>
+          <MaterialCommunityIcons name="swap-vertical" size={14} color={Colors.primary} />
+        </Pressable>
+        <Pressable onPress={() => toggleSort('name')} style={[styles.thBtn, { flex: 2, justifyContent: 'flex-end' }]}>
+          <Text style={styles.thText}>المنتج</Text>
+          <MaterialCommunityIcons name="swap-vertical" size={14} color={Colors.primary} />
+        </Pressable>
+      </View>
+
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <EmptyState
-            icon="package-variant-closed"
+            icon="cube-scan"
             title={search ? 'لا توجد نتائج' : 'لا توجد منتجات'}
-            description={search ? 'جرب كلمة بحث أخرى' : 'ابدأ بإضافة أول منتج إلى المخزون'}
+            description={search ? 'جرب كلمة بحث أخرى' : 'اضغط + لإضافة أول منتج'}
           />
         }
         renderItem={({ item }) => {
           const low = item.quantity <= item.lowStockAlert;
-          const profit = item.salePrice - item.purchasePrice;
           return (
-            <View style={styles.card}>
-              <View style={styles.cardTop}>
-                {canEdit ? (
-                  <View style={styles.actions}>
-                    <Pressable
-                      onPress={() => confirmDelete(item)}
-                      hitSlop={8}
-                      style={({ pressed }) => [styles.actBtn, pressed && { opacity: 0.7 }]}
-                    >
-                      <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
-                    </Pressable>
-                    <Pressable
-                      onPress={() => openEdit(item)}
-                      hitSlop={8}
-                      style={({ pressed }) => [styles.actBtn, pressed && { opacity: 0.7 }]}
-                    >
-                      <MaterialCommunityIcons name="pencil-outline" size={18} color={Colors.info} />
-                    </Pressable>
-                  </View>
-                ) : <View />}
-                <View style={{ flex: 1, alignItems: 'flex-end' }}>
-                  <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
-                  {item.barcode ? <Text style={styles.cardSubtitle}>كود: {item.barcode}</Text> : null}
-                  {item.category ? (
-                    <View style={styles.categoryTag}>
-                      <Text style={styles.categoryText}>{item.category}</Text>
-                    </View>
-                  ) : null}
-                </View>
+            <Pressable
+              onPress={() => canEdit && openEdit(item)}
+              style={({ pressed }) => [styles.row, pressed && { backgroundColor: Colors.surfaceAlt }]}
+            >
+              <Text style={styles.cellNum}>{formatNumber(item.salePrice)}</Text>
+              <Text style={[styles.cellNum, low && { color: Colors.danger, fontWeight: FontWeight.bold }]}>
+                {formatNumber(item.quantity)}
+              </Text>
+              <View style={styles.nameCell}>
+                <Text style={styles.cellName} numberOfLines={1}>{item.name}</Text>
+                {item.unit ? <Text style={styles.cellUnit}>{item.unit}</Text> : null}
               </View>
-              {item.images && item.images.length > 0 ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.imagesRow}>
-                  {item.images.map((uri, idx) => (
-                    <Pressable key={idx} onPress={() => setZoomImage(uri)}>
-                      <Image source={{ uri }} style={styles.imageThumb} contentFit="cover" transition={200} />
-                    </Pressable>
-                  ))}
-                </ScrollView>
-              ) : null}
-              <View style={styles.cardRow}>
-                <View style={styles.metric}>
-                  <Text style={styles.metricLabel}>الكمية</Text>
-                  <Text style={[styles.metricValue, low && { color: Colors.danger }]}>
-                    {formatNumber(item.quantity)} {item.unit || ''}
-                  </Text>
-                </View>
-                <View style={styles.metric}>
-                  <Text style={styles.metricLabel}>الشراء</Text>
-                  <Text style={styles.metricValue}>
-                    {formatCurrency(item.purchasePrice, settings.currency)}
-                  </Text>
-                </View>
-                <View style={styles.metric}>
-                  <Text style={styles.metricLabel}>البيع</Text>
-                  <Text style={[styles.metricValue, { color: Colors.primary }]}>
-                    {formatCurrency(item.salePrice, settings.currency)}
-                  </Text>
-                </View>
-              </View>
-              {item.prices && item.prices.length > 0 ? (
-                <View style={styles.pricesBox}>
-                  {item.prices.map((p) => (
-                    <View key={p.id} style={styles.priceTag}>
-                      <Text style={styles.priceTagPrice}>
-                        {formatCurrency(p.price, settings.currency)}
-                      </Text>
-                      <Text style={styles.priceTagLabel}>{p.label}</Text>
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-              <View style={styles.warehouseBreak}>
-                {warehouses.map((w) => {
-                  const qty = getStock(item.id, w.id);
-                  if (qty === 0) return null;
-                  return (
-                    <View key={w.id} style={styles.whTag}>
-                      <MaterialCommunityIcons
-                        name={w.type === 'main' ? 'warehouse' : 'storefront-outline'}
-                        size={12}
-                        color={Colors.primary}
-                      />
-                      <Text style={styles.whTagText}>
-                        {w.name}: {formatNumber(qty)}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-              <View style={styles.cardFooter}>
-                {low ? (
-                  <View style={[styles.tag, { backgroundColor: Colors.dangerSoft }]}>
-                    <MaterialCommunityIcons name="alert" size={12} color={Colors.danger} />
-                    <Text style={[styles.tagText, { color: Colors.danger }]}>كمية منخفضة</Text>
-                  </View>
-                ) : (
-                  <View style={[styles.tag, { backgroundColor: Colors.successSoft }]}>
-                    <MaterialCommunityIcons name="check" size={12} color={Colors.success} />
-                    <Text style={[styles.tagText, { color: Colors.success }]}>متوفر</Text>
-                  </View>
-                )}
-                <Text style={styles.profit}>
-                  ربح/قطعة:{' '}
-                  <Text style={{ color: profit >= 0 ? Colors.success : Colors.danger }}>
-                    {formatCurrency(profit, settings.currency)}
-                  </Text>
-                </Text>
-              </View>
-            </View>
+            </Pressable>
           );
         }}
       />
 
+      {canEdit ? (
+        <>
+          <Pressable
+            onPress={() => setMenuVisible(true)}
+            style={({ pressed }) => [styles.fabSmall, pressed && { opacity: 0.85 }]}
+          >
+            <MaterialCommunityIcons name="dots-horizontal" size={24} color={Colors.primary} />
+          </Pressable>
+          <Pressable
+            onPress={openCreate}
+            style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+          >
+            <MaterialCommunityIcons name="plus" size={28} color={Colors.white} />
+          </Pressable>
+        </>
+      ) : null}
+
+      <Modal
+        visible={menuVisible}
+        onClose={() => setMenuVisible(false)}
+        title="خيارات"
+      >
+        <Pressable
+          onPress={() => { setMenuVisible(false); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>عرض المنتجات</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMenuVisible(false); openCreate(); }}
+          style={styles.menuRow}
+        >
+          <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+          <Text style={styles.menuLabel}>إضافة منتج جديد</Text>
+        </Pressable>
+      </Modal>
+
       <Modal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        title={editing ? 'تعديل منتج' : 'إضافة منتج'}
+        title={editing ? 'تعديل منتج' : 'اضافة منتج جديد'}
         footer={
-          <>
-            <Button title="إلغاء" variant="secondary" onPress={() => setModalVisible(false)} style={{ flex: 1 }} disabled={uploading} />
-            <Button
-              title={uploading ? 'جاري رفع الصور...' : 'حفظ'}
-              onPress={handleSubmit}
-              style={{ flex: 1 }}
-              loading={uploading}
-            />
-          </>
+          <Button
+            title={uploading ? 'جاري الرفع...' : 'حفظ'}
+            onPress={handleSubmit}
+            loading={uploading}
+            fullWidth
+            size="lg"
+          />
         }
       >
         <Input
           label="اسم المنتج"
           value={form.name}
           onChangeText={(t) => setForm((p) => ({ ...p, name: t }))}
-          placeholder="مثال: خلاط مياه كروم"
+          placeholder="اسم المنتج"
           error={errors.name}
         />
-        <Input
-          label="الباركود"
-          value={form.barcode}
-          onChangeText={(t) => setForm((p) => ({ ...p, barcode: t }))}
-          placeholder="اختياري"
-        />
-        <Input
-          label="الفئة"
-          value={form.category}
-          onChangeText={(t) => setForm((p) => ({ ...p, category: t }))}
-          placeholder="مثل: خلاطات، أدوات صحية"
-        />
-        <Input
-          label="الوحدة"
-          value={form.unit}
-          onChangeText={(t) => setForm((p) => ({ ...p, unit: t }))}
-          placeholder="قطعة، كرتون، متر"
-        />
-        <Input
-          label="سعر الشراء"
-          value={form.purchasePrice}
-          onChangeText={(t) => setForm((p) => ({ ...p, purchasePrice: t }))}
-          placeholder="0.00"
-          keyboardType="decimal-pad"
-          error={errors.purchasePrice}
-        />
-        <Input
-          label="سعر البيع (قطاعي)"
-          value={form.salePrice}
-          onChangeText={(t) => setForm((p) => ({ ...p, salePrice: t }))}
-          placeholder="0.00"
-          keyboardType="decimal-pad"
-          error={errors.salePrice}
-        />
 
-        <View style={styles.subSection}>
-          <Pressable onPress={addCustomPrice} style={styles.addPriceBtn}>
-            <MaterialCommunityIcons name="plus" size={14} color={Colors.primary} />
-            <Text style={styles.addPriceText}>إضافة سعر</Text>
-          </Pressable>
-          <Text style={styles.subSectionTitle}>أسعار إضافية (جملة، نصف جملة...)</Text>
-        </View>
-        {form.prices.map((p, idx) => (
-          <View key={p.id} style={styles.priceRow}>
-            <Pressable onPress={() => removeCustomPrice(idx)} hitSlop={6} style={styles.actBtn}>
-              <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
+        <View>
+          <Text style={styles.fieldLabel}>الكمية</Text>
+          <View style={styles.qtyRow}>
+            <Pressable
+              onPress={() => setUnitPickerVisible(true)}
+              style={styles.unitChip}
+            >
+              <Text style={styles.unitText}>{form.unit}</Text>
             </Pressable>
+            <View style={styles.qtyDivider} />
             <Input
               containerStyle={{ flex: 1 }}
-              value={String(p.price)}
-              onChangeText={(t) => updateCustomPrice(idx, { price: Number(t) || 0 })}
+              style={{ borderWidth: 0, paddingHorizontal: Spacing.md }}
+              value={form.quantity}
+              onChangeText={(t) => setForm((p) => ({ ...p, quantity: t }))}
+              placeholder="0.00"
               keyboardType="decimal-pad"
-              placeholder="السعر"
-            />
-            <Input
-              containerStyle={{ flex: 1 }}
-              value={p.label}
-              onChangeText={(t) => updateCustomPrice(idx, { label: t })}
-              placeholder="جملة"
+              editable={!editing}
             />
           </View>
-        ))}
-
-        {!editing ? (
-          <>
-            <Text style={styles.fieldLabel}>المخزن (يجب أن يكون رئيسي)</Text>
-            {mainWarehouses.map((w) => (
-              <Pressable
-                key={w.id}
-                onPress={() => setForm((p) => ({ ...p, warehouseId: w.id }))}
-                style={({ pressed }) => [
-                  styles.whSelect,
-                  form.warehouseId === w.id && styles.whSelectActive,
-                  pressed && { opacity: 0.85 },
-                ]}
-              >
-                <MaterialCommunityIcons
-                  name={form.warehouseId === w.id ? 'check-circle' : 'circle-outline'}
-                  size={20}
-                  color={form.warehouseId === w.id ? Colors.primary : Colors.textMuted}
-                />
-                <Text style={styles.whSelectText}>{w.name}</Text>
-              </Pressable>
-            ))}
-            {errors.warehouseId ? <Text style={{ color: Colors.danger }}>{errors.warehouseId}</Text> : null}
-          </>
-        ) : null}
-
-        <Input
-          label={editing ? 'الكمية الإجمالية (للعرض فقط)' : 'الكمية الابتدائية'}
-          value={form.quantity}
-          onChangeText={(t) => setForm((p) => ({ ...p, quantity: t }))}
-          placeholder="0"
-          keyboardType="number-pad"
-          editable={!editing}
-          error={errors.quantity}
-        />
-        <Input
-          label="حد التنبيه"
-          value={form.lowStockAlert}
-          onChangeText={(t) => setForm((p) => ({ ...p, lowStockAlert: t }))}
-          placeholder="5"
-          keyboardType="number-pad"
-        />
-
-        <View style={styles.cloudHint}>
-          <MaterialCommunityIcons name="cloud-upload" size={14} color={Colors.info} />
-          <Text style={styles.cloudHintText}>الصور تُحفظ سحابياً وتظهر على جميع أجهزتك</Text>
         </View>
-        <View style={styles.subSection}>
-          <Button title="إضافة صورة" icon="image-plus" variant="secondary" size="sm" onPress={pickImage} />
-          <Text style={styles.subSectionTitle}>صور المنتج ({form.images.length})</Text>
+
+        <View style={styles.priceRow}>
+          <Input
+            containerStyle={{ flex: 1 }}
+            label="سعر البيع"
+            value={form.salePrice}
+            onChangeText={(t) => setForm((p) => ({ ...p, salePrice: t }))}
+            placeholder="0.00"
+            keyboardType="decimal-pad"
+            error={errors.salePrice}
+          />
+          <Input
+            containerStyle={{ flex: 1 }}
+            label="سعر الشراء"
+            value={form.purchasePrice}
+            onChangeText={(t) => setForm((p) => ({ ...p, purchasePrice: t }))}
+            placeholder="0.00"
+            keyboardType="decimal-pad"
+            error={errors.purchasePrice}
+          />
         </View>
-        {form.images.length > 0 ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {form.images.map((uri, idx) => (
-              <View key={idx} style={styles.formImageWrap}>
-                <Image source={{ uri }} style={styles.formImage} contentFit="cover" transition={200} />
-                <Pressable
-                  onPress={() => setForm((p) => ({ ...p, images: p.images.filter((_, i) => i !== idx) }))}
-                  style={styles.removeImageBtn}
-                >
-                  <MaterialCommunityIcons name="close" size={14} color={Colors.white} />
+
+        {!showPrices ? (
+          <Pressable onPress={() => { setShowPrices(true); addCustomPrice(); }} style={styles.addLink}>
+            <MaterialCommunityIcons name="plus" size={16} color={Colors.primary} />
+            <Text style={styles.addLinkText}>اضافة اسعار بيع اخري</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.expanded}>
+            <Text style={styles.fieldLabel}>أسعار بيع إضافية</Text>
+            {form.prices.map((p, idx) => (
+              <View key={p.id} style={styles.customPriceRow}>
+                <Pressable onPress={() => removeCustomPrice(idx)} hitSlop={6} style={styles.actBtnSmall}>
+                  <MaterialCommunityIcons name="close" size={16} color={Colors.danger} />
                 </Pressable>
+                <Input
+                  containerStyle={{ flex: 1 }}
+                  value={String(p.price)}
+                  onChangeText={(t) => updateCustomPrice(idx, { price: Number(t) || 0 })}
+                  keyboardType="decimal-pad"
+                  placeholder="السعر"
+                />
+                <Input
+                  containerStyle={{ flex: 1 }}
+                  value={p.label}
+                  onChangeText={(t) => updateCustomPrice(idx, { label: t })}
+                  placeholder="جملة"
+                />
               </View>
             ))}
-          </ScrollView>
-        ) : null}
-        <Input
-          label="ملاحظات"
-          value={form.notes}
-          onChangeText={(t) => setForm((p) => ({ ...p, notes: t }))}
-          multiline
-          numberOfLines={3}
-          style={{ minHeight: 80, textAlignVertical: 'top' }}
-        />
+            <Pressable onPress={addCustomPrice} style={styles.addLink}>
+              <MaterialCommunityIcons name="plus" size={14} color={Colors.primary} />
+              <Text style={styles.addLinkText}>إضافة سعر آخر</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {!showBarcode ? (
+          <Pressable onPress={() => setShowBarcode(true)} style={styles.addLink}>
+            <MaterialCommunityIcons name="plus" size={16} color={Colors.primary} />
+            <Text style={styles.addLinkText}>اضافة باركود للمنتج</Text>
+          </Pressable>
+        ) : (
+          <Input
+            label="الباركود"
+            value={form.barcode}
+            onChangeText={(t) => setForm((p) => ({ ...p, barcode: t }))}
+            placeholder="الباركود"
+          />
+        )}
+
+        {!showDetails ? (
+          <Pressable onPress={() => setShowDetails(true)} style={styles.addLink}>
+            <MaterialCommunityIcons name="plus" size={16} color={Colors.primary} />
+            <Text style={styles.addLinkText}>اضافة تفاصيل اخري</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.expanded}>
+            <Input
+              label="الفئة"
+              value={form.category}
+              onChangeText={(t) => setForm((p) => ({ ...p, category: t }))}
+              placeholder="مثل: خلاطات"
+            />
+            <Input
+              label="حد التنبيه"
+              value={form.lowStockAlert}
+              onChangeText={(t) => setForm((p) => ({ ...p, lowStockAlert: t }))}
+              placeholder="5"
+              keyboardType="number-pad"
+            />
+            <Input
+              label="ملاحظات"
+              value={form.notes}
+              onChangeText={(t) => setForm((p) => ({ ...p, notes: t }))}
+              placeholder="ملاحظات"
+              multiline
+              numberOfLines={3}
+              style={{ minHeight: 80, textAlignVertical: 'top' }}
+            />
+            <View style={styles.imagesHeader}>
+              <Button title="إضافة صورة" icon="image-plus" variant="secondary" size="sm" onPress={pickImage} />
+              <Text style={styles.fieldLabel}>صور المنتج ({form.images.length})</Text>
+            </View>
+            {form.images.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {form.images.map((uri, idx) => (
+                  <View key={idx} style={styles.imgWrap}>
+                    <Image source={{ uri }} style={styles.img} contentFit="cover" transition={200} />
+                    <Pressable
+                      onPress={() => setForm((p) => ({ ...p, images: p.images.filter((_, i) => i !== idx) }))}
+                      style={styles.imgRemove}
+                    >
+                      <MaterialCommunityIcons name="close" size={14} color={Colors.white} />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : null}
+          </View>
+        )}
       </Modal>
 
-      <Modal visible={!!zoomImage} onClose={() => setZoomImage(null)} title="عرض الصورة">
-        {zoomImage ? (
-          <Image source={{ uri: zoomImage }} style={styles.zoomImg} contentFit="contain" transition={200} />
-        ) : null}
+      <Modal
+        visible={unitPickerVisible}
+        onClose={() => setUnitPickerVisible(false)}
+        title="اختر الوحدة"
+      >
+        {UNITS.map((u) => (
+          <Pressable
+            key={u}
+            onPress={() => {
+              setForm((p) => ({ ...p, unit: u }));
+              setUnitPickerVisible(false);
+            }}
+            style={styles.menuRow}
+          >
+            <MaterialCommunityIcons
+              name={form.unit === u ? 'check-circle' : 'circle-outline'}
+              size={20}
+              color={form.unit === u ? Colors.primary : Colors.textMuted}
+            />
+            <Text style={styles.menuLabel}>{u}</Text>
+          </Pressable>
+        ))}
       </Modal>
     </SafeAreaView>
   );
@@ -546,173 +510,130 @@ export default function ProductsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  headerBtn: {
-    backgroundColor: Colors.primary,
-    width: 40,
-    height: 40,
-    borderRadius: Radius.full,
+  toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  tableHeader: {
+    flexDirection: 'row-reverse',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 2,
+    borderBottomColor: Colors.primary,
+    gap: Spacing.md,
+  },
+  thBtn: {
+    flexDirection: 'row-reverse',
     alignItems: 'center',
+    gap: 4,
+    flex: 1,
     justifyContent: 'center',
   },
-  toolbar: {
-    paddingHorizontal: Spacing.lg,
+  thText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
+  list: { paddingBottom: 120 },
+  row: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
     paddingVertical: Spacing.md,
-    backgroundColor: Colors.background,
+    paddingHorizontal: Spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: Spacing.md,
+    minHeight: 60,
   },
-  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
-  card: {
+  cellNum: {
+    flex: 1,
+    fontSize: FontSize.lg,
+    color: Colors.text,
+    textAlign: 'center',
+    fontWeight: FontWeight.medium,
+  },
+  nameCell: { flex: 2, alignItems: 'flex-end' },
+  cellName: { fontSize: FontSize.md, color: Colors.text, fontWeight: FontWeight.semibold, textAlign: 'right' },
+  cellUnit: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.md,
+  },
+  fabSmall: {
+    position: 'absolute',
+    bottom: 100,
+    left: 28,
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
     backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: Spacing.md,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
     ...Shadow.sm,
   },
-  cardTop: {
+  fieldLabel: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium, marginBottom: 8, textAlign: 'right' },
+  qtyRow: {
     flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: Spacing.md,
-  },
-  actions: { flexDirection: 'row-reverse', gap: Spacing.sm },
-  actBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.surfaceAlt,
     alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
-  cardSubtitle: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4 },
-  categoryTag: {
-    marginTop: 6,
-    backgroundColor: Colors.primarySoft,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: Radius.full,
-  },
-  categoryText: { color: Colors.primary, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  imagesRow: { marginBottom: Spacing.md },
-  imageThumb: {
-    width: 70,
-    height: 70,
+    backgroundColor: Colors.surface,
     borderRadius: Radius.md,
-    marginLeft: Spacing.sm,
-    backgroundColor: Colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    minHeight: 52,
   },
-  cardRow: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-  },
-  metric: { alignItems: 'center', flex: 1 },
-  metricLabel: { fontSize: FontSize.xs, color: Colors.textMuted },
-  metricValue: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.text, marginTop: 4 },
-  pricesBox: {
-    flexDirection: 'row-reverse',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: Spacing.sm,
-  },
-  priceTag: {
-    flexDirection: 'row-reverse',
-    backgroundColor: Colors.infoSoft,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  unitChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
     borderRadius: Radius.full,
+    margin: 6,
+  },
+  unitText: { color: Colors.primary, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
+  qtyDivider: { width: 1, height: 28, backgroundColor: Colors.border },
+  priceRow: { flexDirection: 'row-reverse', gap: Spacing.md },
+  addLink: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
     gap: 4,
+    paddingVertical: Spacing.sm,
   },
-  priceTagLabel: { color: Colors.info, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  priceTagPrice: { color: Colors.info, fontSize: FontSize.xs },
-  warehouseBreak: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 4, marginTop: Spacing.sm },
-  whTag: {
+  addLinkText: { color: Colors.primary, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
+  expanded: { gap: Spacing.md },
+  customPriceRow: {
     flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: Colors.primarySoft,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: Radius.sm,
-  },
-  whTagText: { color: Colors.primary, fontSize: 11, fontWeight: FontWeight.medium },
-  cardFooter: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: Spacing.md,
-  },
-  tag: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.full,
-  },
-  tagText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  profit: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  fieldLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right', marginBottom: 6 },
-  whSelect: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 8,
-    padding: Spacing.md,
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: Radius.md,
-    marginBottom: 6,
-  },
-  whSelectActive: { backgroundColor: Colors.primarySoft },
-  whSelectText: { color: Colors.text, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
-  subSection: {
-    flexDirection: 'row-reverse',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: Spacing.sm,
-  },
-  subSectionTitle: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.semibold },
-  addPriceBtn: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: Colors.primarySoft,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
-  },
-  addPriceText: { color: Colors.primary, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  priceRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
     gap: Spacing.sm,
     backgroundColor: Colors.surfaceAlt,
     padding: Spacing.sm,
     borderRadius: Radius.md,
-  },
-  formImageWrap: { position: 'relative', marginLeft: Spacing.sm },
-  formImage: { width: 80, height: 80, borderRadius: Radius.md },
-  removeImageBtn: {
-    position: 'absolute',
-    top: -6,
-    left: -6,
-    width: 22,
-    height: 22,
-    borderRadius: Radius.full,
-    backgroundColor: Colors.danger,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  cloudHint: {
+  actBtnSmall: {
+    width: 32, height: 32, borderRadius: Radius.full,
+    backgroundColor: Colors.dangerSoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  imagesHeader: { flexDirection: 'row-reverse', justifyContent: 'space-between', alignItems: 'center', marginTop: Spacing.sm },
+  imgWrap: { position: 'relative', marginLeft: Spacing.sm },
+  img: { width: 80, height: 80, borderRadius: Radius.md },
+  imgRemove: {
+    position: 'absolute', top: -6, left: -6, width: 22, height: 22,
+    borderRadius: Radius.full, backgroundColor: Colors.danger,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  menuRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.infoSoft,
-    padding: Spacing.sm,
-    borderRadius: Radius.sm,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
-  cloudHintText: { color: Colors.info, fontSize: FontSize.xs, flex: 1 },
-  zoomImg: { width: '100%', height: 400, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.md },
+  menuLabel: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
 });

@@ -45,6 +45,9 @@ export type Customer = {
   phone: string;
   address: string;
   debt: number;
+  category?: string;
+  maxDebt?: number;
+  notes?: string;
   createdAt: number;
 };
 
@@ -53,6 +56,9 @@ export type Supplier = {
   name: string;
   phone: string;
   address: string;
+  category?: string;
+  maxDebt?: number;
+  notes?: string;
   createdAt: number;
 };
 

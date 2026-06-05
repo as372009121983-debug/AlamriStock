@@ -576,7 +576,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [products, setStocks, setProducts, logActivity]); // Added setStocks and setProducts to deps
 
   const addCustomer = useCallback<StoreContextType['addCustomer']>((data) => {
-    const customer: Customer = { id: generateId(), createdAt: Date.now(), debt: data.debt ?? 0, name: data.name, phone: data.phone, address: data.address };
+    const customer: Customer = { ...data, id: generateId(), createdAt: Date.now(), debt: data.debt ?? 0 };
     setCustomers((prev) => [customer, ...prev]);
     logActivity('customer_add', `إضافة عميل: ${customer.name}`, { refId: customer.id });
     return customer;

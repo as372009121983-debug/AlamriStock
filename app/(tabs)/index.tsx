@@ -1,475 +1,392 @@
 // Powered by OnSpace.AI
-import React, { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Linking, Modal as RNModal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
-import { StatCard } from '@/components/ui/StatCard';
-import { SectionTitle } from '@/components/ui/SectionTitle';
-import { AppLogo } from '@/components/ui/AppLogo';
+import { SearchBar } from '@/components/ui/SearchBar';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { formatCurrency, formatDateTime, formatNumber, isSameDay } from '@/services/format';
+
+type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
+
+type Tile = {
+  title: string;
+  icon: IconName;
+  route: string;
+  filled?: boolean;
+};
 
 export default function DashboardScreen() {
   const router = useRouter();
-  const { products, customers, suppliers, sales, purchases, settings, warehouses, expenses } =
-    useStore();
-  const { user, logout } = useAuth();
+  const { settings, products, customers, sales, expenses } = useStore();
+  const { user, isOwner, logout, pendingUsersCount } = useAuth();
+  const [search, setSearch] = useState('');
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
-  const stats = useMemo(() => {
-    const totalRevenue = sales.reduce((s, sa) => s + sa.total, 0);
-    const totalCost = sales.reduce(
-      (s, sa) => s + sa.items.reduce((sum, it) => sum + it.purchasePrice * it.quantity, 0),
-      0
+  const baseTiles: Tile[] = [
+    { title: 'المنتجات', icon: 'cube-outline', route: '/(tabs)/products' },
+    { title: 'المصروفات', icon: 'cash-multiple', route: '/expenses' },
+    { title: 'المشتريات', icon: 'shopping-outline', route: '/purchases' },
+    { title: 'المبيعات', icon: 'currency-usd', route: '/(tabs)/sales', filled: true },
+    { title: 'الموردين', icon: 'truck-outline', route: '/suppliers' },
+    { title: 'العملاء', icon: 'account-outline', route: '/(tabs)/customers' },
+    { title: 'التقارير', icon: 'chart-line-variant', route: '/reports', filled: true },
+    { title: 'المستخدمين', icon: 'account-group-outline', route: isOwner ? '/users' : '/(tabs)/more' },
+  ];
+
+  const tiles = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return baseTiles;
+    return baseTiles.filter((t) => t.title.includes(q));
+  }, [search, baseTiles]);
+
+  const drawerItems: { label: string; icon: IconName; route?: string; danger?: boolean; onPress?: () => void; badge?: number }[] = [
+    { label: 'فاتورة بيع جديدة', icon: 'cart-plus', route: '/new-sale' },
+    { label: 'اليومية', icon: 'calendar-today', route: '/journal' },
+    { label: 'الجرد', icon: 'clipboard-list-outline', route: '/inventory' },
+    { label: 'الأرباح', icon: 'trending-up', route: '/profits' },
+    { label: 'دفعات العملاء', icon: 'cash-plus', route: '/customer-payments' },
+    { label: 'قبض العمال', icon: 'account-cash-outline', route: '/workers' },
+    { label: 'سلفات العمال', icon: 'hand-coin-outline', route: '/worker-advances' },
+    { label: 'المرتجعات', icon: 'undo-variant', route: '/returns' },
+    { label: 'مرتجعات الشراء', icon: 'redo-variant', route: '/purchase-returns' },
+    { label: 'التحويلات', icon: 'swap-horizontal', route: '/transfers' },
+    { label: 'المخازن', icon: 'warehouse', route: '/warehouses' },
+    ...(isOwner ? [{ label: 'طلبات الانضمام', icon: 'account-clock-outline' as IconName, route: '/join-requests', badge: pendingUsersCount }] : []),
+    { label: 'استيراد منتجات', icon: 'file-excel-outline', route: '/import-products' },
+    { label: 'استيراد عملاء', icon: 'file-import-outline', route: '/import-customers' },
+    { label: 'استخراج بالذكاء الاصطناعي', icon: 'camera-iris', route: '/ocr-import' },
+    { label: 'البيان', icon: 'history', route: '/activity-log' },
+    { label: 'الإعدادات', icon: 'cog-outline', route: '/settings' },
+    { label: 'حول البرنامج', icon: 'information-outline', route: '/about' },
+    { label: 'تسجيل الخروج', icon: 'logout', danger: true, onPress: logout },
+  ];
+
+  function openWhatsapp() {
+    const phone = settings.phone?.replace(/\D/g, '') || '201000000000';
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent('مرحباً، أحتاج للدعم الفني')}`;
+    Linking.openURL(url).catch(() => null);
+  }
+
+  function renderTile(tile: Tile, index: number) {
+    return (
+      <Pressable
+        key={tile.title}
+        onPress={() => router.push(tile.route as any)}
+        style={({ pressed }) => [styles.tile, pressed && styles.tilePressed]}
+      >
+        <View style={styles.tileInner}>
+          <View style={[styles.iconWrap, tile.filled && styles.iconWrapFilled]}>
+            <MaterialCommunityIcons
+              name={tile.icon}
+              size={36}
+              color={tile.filled ? Colors.white : Colors.primaryDark}
+            />
+          </View>
+          <Text style={styles.tileLabel}>{tile.title}</Text>
+        </View>
+      </Pressable>
     );
-    const totalDiscount = sales.reduce((s, sa) => s + sa.discount, 0);
-    const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-    const grossProfit = totalRevenue - totalCost;
-    const netProfit = grossProfit - totalExpenses;
-    const stockValue = products.reduce((s, p) => s + p.purchasePrice * p.quantity, 0);
-    const today = Date.now();
-    const todaySales = sales.filter((s) => isSameDay(s.date, today));
-    const todayTotal = todaySales.reduce((s, sa) => s + sa.total, 0);
-    const lowStock = products.filter((p) => p.quantity <= p.lowStockAlert);
-    const mainWh = warehouses.filter((w) => w.type === 'main').length;
-    const showWh = warehouses.filter((w) => w.type === 'showroom').length;
-    return {
-      totalRevenue,
-      grossProfit,
-      netProfit,
-      totalDiscount,
-      totalExpenses,
-      stockValue,
-      todayTotal,
-      todayCount: todaySales.length,
-      lowStock,
-      mainWh,
-      showWh,
-    };
-  }, [sales, products, expenses, warehouses]);
-
-  const recentSales = sales.slice(0, 4);
-  const recentPurchases = purchases.slice(0, 3);
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      <View style={styles.header}>
+        <Pressable
+          onPress={() => setDrawerVisible(true)}
+          hitSlop={10}
+          style={({ pressed }) => [styles.menuBtn, pressed && { opacity: 0.7 }]}
+        >
+          <MaterialCommunityIcons name="menu" size={28} color={Colors.text} />
+        </Pressable>
+        <Text style={styles.brandTitle}>{settings.companyName || 'ShopUp'}</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
       <ScrollView
-        style={{ flex: 1 }}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
-        <LinearGradient
-          colors={[Colors.primaryDark, Colors.primary]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          <View style={styles.heroRow}>
-            <View style={styles.heroIcon}>
-              <AppLogo size={44} />
-            </View>
-            <View style={{ flex: 1, alignItems: 'flex-end' }}>
-              <Text style={styles.heroSubtitle}>{user ? `مرحباً، ${user.name}` : 'مرحباً'}</Text>
-              <Text style={styles.heroTitle} numberOfLines={1}>
-                {settings.appTitle}
-              </Text>
-            </View>
-            <Pressable
-              onPress={logout}
-              style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.85 }]}
-              hitSlop={6}
-            >
-              <MaterialCommunityIcons name="logout" size={18} color={Colors.white} />
-            </Pressable>
-          </View>
+        <View style={styles.searchWrap}>
+          <SearchBar value={search} onChangeText={setSearch} placeholder="بحث" />
+        </View>
 
-          <View style={styles.heroStat}>
-            <Text style={styles.heroLabel}>مبيعات اليوم</Text>
-            <Text style={styles.heroAmount}>
-              {formatCurrency(stats.todayTotal, settings.currency)}
-            </Text>
-            <View style={styles.heroBadge}>
-              <MaterialCommunityIcons name="receipt" size={14} color={Colors.white} />
-              <Text style={styles.heroBadgeText}>
-                {formatNumber(stats.todayCount)} فاتورة اليوم
-              </Text>
-            </View>
-          </View>
-        </LinearGradient>
-
-        <SectionTitle title="نظرة عامة" hint="الأرقام الرئيسية" />
         <View style={styles.grid}>
-          <StatCard
-            title="قيمة المخزون"
-            value={formatCurrency(stats.stockValue, settings.currency)}
-            icon="warehouse"
-            color={Colors.primary}
-            bg={Colors.primarySoft}
-          />
-          <StatCard
-            title="إجمالي الأرباح"
-            value={formatCurrency(stats.grossProfit, settings.currency)}
-            icon="trending-up"
-            color={Colors.success}
-            bg={Colors.successSoft}
-          />
-          <StatCard
-            title="إجمالي المبيعات"
-            value={formatCurrency(stats.totalRevenue, settings.currency)}
-            icon="chart-line"
-            color={Colors.info}
-            bg={Colors.infoSoft}
-          />
-          <StatCard
-            title="صافي الربح"
-            value={formatCurrency(stats.netProfit, settings.currency)}
-            icon="cash-multiple"
-            color={Colors.warning}
-            bg={Colors.warningSoft}
-          />
+          {tiles.map(renderTile)}
         </View>
 
-        <View style={styles.miniGrid}>
-          <MiniStat
-            value={formatNumber(products.length)}
-            label="منتج"
-            icon="package-variant-closed"
-            color={Colors.primary}
-          />
-          <MiniStat
-            value={formatNumber(customers.length)}
-            label="عميل"
-            icon="account-group-outline"
-            color={Colors.info}
-          />
-          <MiniStat
-            value={formatNumber(suppliers.length)}
-            label="مورد"
-            icon="truck-delivery-outline"
-            color={Colors.warning}
-          />
-        </View>
-        <View style={styles.miniGrid}>
-          <MiniStat
-            value={formatNumber(stats.mainWh)}
-            label="مخزن"
-            icon="warehouse"
-            color={Colors.primary}
-          />
-          <MiniStat
-            value={formatNumber(stats.showWh)}
-            label="معرض"
-            icon="storefront-outline"
-            color={Colors.success}
-          />
-          <MiniStat
-            value={formatNumber(stats.lowStock.length)}
-            label="نقص"
-            icon="alert-outline"
-            color={Colors.danger}
-          />
-        </View>
-
-        <SectionTitle title="إجراءات سريعة" />
-        <View style={styles.quickRow}>
-          <QuickAction
-            label="فاتورة بيع"
-            icon="cart-plus"
-            color={Colors.primary}
-            onPress={() => router.push('/new-sale')}
-          />
-          <QuickAction
-            label="منتج جديد"
-            icon="plus-box-outline"
-            color={Colors.info}
-            onPress={() => router.push('/(tabs)/products?new=1' as any)}
-          />
-          <QuickAction
-            label="مشتريات"
-            icon="truck-fast-outline"
-            color={Colors.warning}
-            onPress={() => router.push('/purchases')}
-          />
-          <QuickAction
-            label="تحويلات"
-            icon="swap-horizontal"
-            color={Colors.success}
-            onPress={() => router.push('/transfers')}
-          />
-          <QuickAction
-            label="مرتجعات"
-            icon="undo-variant"
-            color={Colors.danger}
-            onPress={() => router.push('/returns')}
-          />
-          <QuickAction
-            label="الجرد"
-            icon="clipboard-list-outline"
-            color={Colors.info}
-            onPress={() => router.push('/inventory')}
-          />
-          <QuickAction
-            label="الأرباح"
-            icon="trending-up"
-            color={Colors.success}
-            onPress={() => router.push('/profits')}
-          />
-        </View>
-
-        {stats.lowStock.length > 0 ? (
-          <>
-            <SectionTitle
-              title="تنبيه المخزون"
-              hint={`${formatNumber(stats.lowStock.length)} منتج`}
-            />
-            <View style={styles.lowStockCard}>
-              {stats.lowStock.slice(0, 4).map((p) => (
-                <View key={p.id} style={styles.lowRow}>
-                  <View style={styles.lowBadge}>
-                    <Text style={styles.lowBadgeText}>{formatNumber(p.quantity)}</Text>
-                  </View>
-                  <Text style={styles.lowName} numberOfLines={1}>
-                    {p.name}
-                  </Text>
-                  <MaterialCommunityIcons name="alert" size={20} color={Colors.warning} />
-                </View>
-              ))}
-            </View>
-          </>
-        ) : null}
-
-        <SectionTitle title="آخر المبيعات" />
-        {recentSales.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <MaterialCommunityIcons name="cart-off" size={32} color={Colors.textMuted} />
-            <Text style={styles.emptyText}>لا توجد مبيعات بعد</Text>
+        <View style={styles.statsRow}>
+          <View style={styles.statBubble}>
+            <Text style={styles.statValue}>{products.length}</Text>
+            <Text style={styles.statLabel}>منتج</Text>
           </View>
-        ) : (
-          recentSales.map((s) => (
-            <Pressable
-              key={s.id}
-              onPress={() => router.push(`/invoice/${s.id}` as any)}
-              style={({ pressed }) => [styles.saleCard, pressed && { opacity: 0.85 }]}
-            >
-              <View style={styles.saleLeft}>
-                <Text style={styles.saleAmount}>
-                  {formatCurrency(s.total, settings.currency)}
-                </Text>
-                <Text style={styles.saleDate}>{formatDateTime(s.date)}</Text>
-              </View>
-              <View style={styles.saleRight}>
-                <Text style={styles.saleNo}>#{s.invoiceNo}</Text>
-                <Text style={styles.saleCustomer} numberOfLines={1}>
-                  {s.customerName}
-                </Text>
-              </View>
-            </Pressable>
-          ))
-        )}
+          <View style={styles.statBubble}>
+            <Text style={styles.statValue}>{customers.length}</Text>
+            <Text style={styles.statLabel}>عميل</Text>
+          </View>
+          <View style={styles.statBubble}>
+            <Text style={styles.statValue}>{sales.length}</Text>
+            <Text style={styles.statLabel}>فاتورة</Text>
+          </View>
+          <View style={styles.statBubble}>
+            <Text style={styles.statValue}>{expenses.length}</Text>
+            <Text style={styles.statLabel}>مصروف</Text>
+          </View>
+        </View>
 
-        {recentPurchases.length > 0 ? (
-          <>
-            <SectionTitle title="آخر المشتريات" />
-            {recentPurchases.map((p) => (
-              <View key={p.id} style={styles.saleCard}>
-                <View style={styles.saleLeft}>
-                  <Text style={[styles.saleAmount, { color: Colors.warning }]}>
-                    {formatCurrency(p.total, settings.currency)}
-                  </Text>
-                  <Text style={styles.saleDate}>{formatDateTime(p.date)}</Text>
-                </View>
-                <View style={styles.saleRight}>
-                  <Text style={styles.saleNo}>#{p.purchaseNo}</Text>
-                  <Text style={styles.saleCustomer} numberOfLines={1}>
-                    {p.supplierName}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </>
-        ) : null}
-
-        <View style={{ height: 24 }} />
+        <View style={{ height: 80 }} />
       </ScrollView>
+
+      <Pressable
+        onPress={openWhatsapp}
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+        hitSlop={6}
+      >
+        <MaterialCommunityIcons name="whatsapp" size={28} color="#25D366" />
+      </Pressable>
+
+      <RNModal
+        visible={drawerVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setDrawerVisible(false)}
+      >
+        <Pressable
+          style={styles.drawerBackdrop}
+          onPress={() => setDrawerVisible(false)}
+        />
+        <SafeAreaView style={styles.drawerWrap} edges={['top', 'bottom']}>
+          <View style={styles.drawer}>
+            <View style={styles.drawerHeader}>
+              <Pressable onPress={() => setDrawerVisible(false)} hitSlop={10}>
+                <MaterialCommunityIcons name="close" size={24} color={Colors.text} />
+              </Pressable>
+              <Text style={styles.drawerTitle}>القائمة</Text>
+            </View>
+
+            <View style={styles.userBox}>
+              <View style={styles.userAvatar}>
+                <MaterialCommunityIcons
+                  name={isOwner ? 'shield-crown' : 'account-circle'}
+                  size={28}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                <Text style={styles.userName}>{user?.name || 'مستخدم'}</Text>
+                {user?.phone ? <Text style={styles.userPhone}>{user.phone}</Text> : null}
+                <View style={styles.userBadge}>
+                  <Text style={styles.userBadgeText}>{isOwner ? 'مالك النظام' : 'مستخدم فرعي'}</Text>
+                </View>
+              </View>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {drawerItems.map((item) => (
+                <Pressable
+                  key={item.label}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    if (item.onPress) item.onPress();
+                    else if (item.route) setTimeout(() => router.push(item.route as any), 80);
+                  }}
+                  style={({ pressed }) => [
+                    styles.drawerItem,
+                    item.danger && { borderTopWidth: 1, borderTopColor: Colors.border, marginTop: Spacing.sm },
+                    pressed && { backgroundColor: Colors.surfaceAlt },
+                  ]}
+                >
+                  <MaterialCommunityIcons name="chevron-left" size={20} color={Colors.textMuted} />
+                  <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
+                    <View style={styles.drawerLabelRow}>
+                      {item.badge && item.badge > 0 ? (
+                        <View style={styles.drawerBadge}>
+                          <Text style={styles.drawerBadgeText}>{item.badge}</Text>
+                        </View>
+                      ) : null}
+                      <Text style={[styles.drawerItemLabel, item.danger && { color: Colors.danger }]}>
+                        {item.label}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={[styles.drawerIcon, item.danger && { backgroundColor: Colors.dangerSoft }]}>
+                    <MaterialCommunityIcons
+                      name={item.icon}
+                      size={22}
+                      color={item.danger ? Colors.danger : Colors.primary}
+                    />
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        </SafeAreaView>
+      </RNModal>
     </SafeAreaView>
-  );
-}
-
-function MiniStat({
-  value,
-  label,
-  icon,
-  color,
-}: {
-  value: string;
-  label: string;
-  icon: keyof typeof MaterialCommunityIcons.glyphMap;
-  color: string;
-}) {
-  return (
-    <View style={styles.mini}>
-      <MaterialCommunityIcons name={icon} size={20} color={color} />
-      <Text style={styles.miniValue}>{value}</Text>
-      <Text style={styles.miniLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function QuickAction({
-  label,
-  icon,
-  color,
-  onPress,
-}: {
-  label: string;
-  icon: keyof typeof MaterialCommunityIcons.glyphMap;
-  color: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.quickItem,
-        { borderColor: color + '33' },
-        pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
-      ]}
-    >
-      <View style={[styles.quickIcon, { backgroundColor: color + '1A' }]}>
-        <MaterialCommunityIcons name={icon} size={22} color={color} />
-      </View>
-      <Text style={styles.quickLabel}>{label}</Text>
-    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  content: { padding: Spacing.lg, paddingBottom: Spacing.xxxl },
-  hero: { borderRadius: Radius.xl, padding: Spacing.xl, ...Shadow.md },
-  heroRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: Spacing.md },
-  heroIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: Radius.full,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoutBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: Radius.full,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
-  heroSubtitle: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.85)' },
-  heroStat: { marginTop: Spacing.xl, alignItems: 'flex-end' },
-  heroLabel: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.sm },
-  heroAmount: {
-    color: Colors.white,
-    fontSize: FontSize.display,
-    fontWeight: FontWeight.bold,
-    marginTop: 4,
-  },
-  heroBadge: {
-    marginTop: Spacing.md,
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: Radius.full,
-  },
-  heroBadgeText: { color: Colors.white, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  grid: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: Spacing.md },
-  miniGrid: { flexDirection: 'row-reverse', gap: Spacing.sm, marginTop: Spacing.sm },
-  mini: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    padding: Spacing.md,
-    alignItems: 'flex-end',
-    borderWidth: 1,
-    borderColor: Colors.border,
-    gap: 4,
-  },
-  miniValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
-  miniLabel: { fontSize: FontSize.xs, color: Colors.textSecondary },
-  quickRow: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: Spacing.md },
-  quickItem: {
-    flex: 1,
-    minWidth: 140,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.lg,
-    alignItems: 'flex-end',
-    borderWidth: 1,
-    ...Shadow.sm,
-  },
-  quickIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.md,
-  },
-  quickLabel: { fontSize: FontSize.md, fontWeight: FontWeight.semibold, color: Colors.text },
-  lowStockCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.warningSoft,
-    padding: Spacing.md,
-    gap: Spacing.sm,
-  },
-  lowRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: Spacing.md, paddingVertical: 6 },
-  lowBadge: {
-    backgroundColor: Colors.warningSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: Radius.sm,
-    minWidth: 36,
-    alignItems: 'center',
-  },
-  lowBadgeText: { color: Colors.warning, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
-  lowName: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
-  emptyCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.lg,
-    padding: Spacing.xl,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  emptyText: { marginTop: 8, fontSize: FontSize.md, color: Colors.text },
-  saleCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    padding: Spacing.lg,
+  header: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  menuBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandTitle: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.text },
+  content: { padding: Spacing.lg, paddingBottom: Spacing.xxxl },
+  searchWrap: { marginBottom: Spacing.lg },
+  grid: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+  },
+  tile: {
+    width: '48%',
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.xl,
+    paddingHorizontal: Spacing.lg,
+    minHeight: 130,
+    ...Shadow.sm,
+  },
+  tilePressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
+  tileInner: { alignItems: 'flex-end', gap: Spacing.md },
+  iconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconWrapFilled: {
+    backgroundColor: Colors.primaryDark,
+  },
+  tileLabel: {
+    fontSize: FontSize.xl,
+    fontWeight: FontWeight.bold,
+    color: Colors.text,
+    textAlign: 'right',
+  },
+  statsRow: {
+    flexDirection: 'row-reverse',
+    gap: Spacing.sm,
+    marginTop: Spacing.xl,
+    paddingHorizontal: 4,
+  },
+  statBubble: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: Colors.border,
-    marginBottom: Spacing.sm,
   },
-  saleRight: { alignItems: 'flex-end' },
-  saleNo: { fontSize: FontSize.xs, color: Colors.textMuted },
-  saleCustomer: {
-    fontSize: FontSize.md,
-    fontWeight: FontWeight.semibold,
-    color: Colors.text,
-    marginTop: 2,
+  statValue: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.primary },
+  statLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#25D366',
+    ...Shadow.md,
   },
-  saleLeft: { alignItems: 'flex-start' },
-  saleAmount: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.primary },
-  saleDate: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  drawerBackdrop: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.5)',
+  },
+  drawerWrap: {
+    position: 'absolute',
+    top: 0, right: 0, bottom: 0,
+    width: '85%',
+    maxWidth: 360,
+  },
+  drawer: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+  },
+  drawerHeader: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginBottom: Spacing.lg,
+  },
+  drawerTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.text },
+  userBox: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryTint,
+    padding: Spacing.md,
+    borderRadius: Radius.md,
+    gap: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  userAvatar: {
+    width: 48, height: 48, borderRadius: Radius.full,
+    backgroundColor: Colors.primarySoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  userName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.text },
+  userPhone: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
+  userBadge: {
+    marginTop: 4,
+    backgroundColor: Colors.primarySoft,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+  },
+  userBadgeText: { color: Colors.primary, fontSize: 10, fontWeight: FontWeight.bold },
+  drawerItem: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    borderRadius: Radius.md,
+  },
+  drawerIcon: {
+    width: 40, height: 40, borderRadius: Radius.md,
+    backgroundColor: Colors.primaryTint,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  drawerLabelRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+  },
+  drawerItemLabel: { fontSize: FontSize.md, fontWeight: FontWeight.medium, color: Colors.text },
+  drawerBadge: {
+    backgroundColor: Colors.danger,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.full,
+    minWidth: 20,
+    alignItems: 'center',
+  },
+  drawerBadgeText: { color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold },
 });

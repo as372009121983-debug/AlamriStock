@@ -8,75 +8,85 @@ import { useAlert } from '@/template';
 import { Header } from '@/components/ui/Header';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { PhoneField } from '@/components/ui/PhoneField';
 import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { AppUser, ROLE_COLORS, ROLE_DESCRIPTIONS, ROLE_LABELS, STATUS_COLORS, STATUS_LABELS, UserRole, UserStatus } from '@/constants/types';
-import { formatDateTime } from '@/services/format';
-
-type FormState = {
-  email: string;
-  phone: string;
-  password: string;
-  name: string;
-  role: UserRole;
-  active: boolean;
-  status: UserStatus;
-};
-const empty: FormState = { email: '', phone: '', password: '', name: '', role: 'sales', active: true, status: 'pending' };
+import { AppUser, ROLE_COLORS, ROLE_LABELS, STATUS_COLORS, STATUS_LABELS, UserRole, UserStatus } from '@/constants/types';
 
 const ROLE_OPTIONS: UserRole[] = ['manager', 'head', 'sales', 'warehouse'];
+const ROLE_DESCRIPTIONS_SHORT: Record<UserRole, string> = {
+  owner: 'صلاحيات كاملة',
+  manager: 'إدارة كاملة عدا المستخدمين',
+  head: 'مشاهدة فقط',
+  sales: 'بيع وعملاء ومرتجعات',
+  warehouse: 'مخزون ومشتريات',
+};
 
 export default function UsersScreen() {
   const { users, addUser, updateUser, deleteUser, approveUser, rejectUser, user, isOwner, pendingUsersCount } = useAuth();
   const { showAlert } = useAlert();
+
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<AppUser | null>(null);
-  const [form, setForm] = useState<FormState>(empty);
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<UserRole>('sales');
+  const [status, setStatus] = useState<UserStatus>('approved');
+  const [advancedVisible, setAdvancedVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState<'all' | UserStatus>('all');
 
   if (!isOwner) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <Header title="المستخدمون" />
-        <EmptyState icon="lock" title="غير مسموح" description="هذه الصفحة للمالك فقط" />
+        <Header title="المستخدمين" />
+        <EmptyState icon="lock-outline" title="غير مسموح" description="هذه الصفحة للمالك فقط" />
       </SafeAreaView>
     );
   }
 
-  const filteredUsers = filter === 'all' ? users : users.filter((u) => u.status === filter);
-
   function openCreate() {
     setEditing(null);
-    setForm({ ...empty, status: 'approved' });
+    setName('');
+    setPhone('');
+    setPassword('');
+    setRole('sales');
+    setStatus('approved');
+    setAdvancedVisible(false);
     setModalVisible(true);
   }
+
   function openEdit(u: AppUser) {
     setEditing(u);
-    setForm({
-      email: u.email,
-      phone: u.phone || '',
-      password: u.password,
-      name: u.name,
-      role: u.role,
-      active: u.active,
-      status: u.status,
-    });
+    setName(u.name);
+    setPhone(u.phone || '');
+    setPassword(u.password);
+    setRole(u.role);
+    setStatus(u.status);
+    setAdvancedVisible(true);
     setModalVisible(true);
   }
+
   async function handleSubmit() {
-    if (!form.name.trim() || !form.password.trim()) {
-      showAlert('تنبيه', 'الاسم وكلمة المرور مطلوبان');
+    if (!name.trim()) {
+      showAlert('تنبيه', 'الاسم مطلوب');
       return;
     }
-    if (!form.phone.trim() && !form.email.trim()) {
-      showAlert('تنبيه', 'يجب إدخال رقم الهاتف أو البريد الإلكتروني');
+    if (!phone.trim()) {
+      showAlert('تنبيه', 'رقم الهاتف مطلوب');
       return;
     }
+    const finalPassword = password.trim() || phone.trim().slice(-4) || '0000';
     setLoading(true);
     if (editing) {
-      const res = await updateUser(editing.id, form);
+      const res = await updateUser(editing.id, {
+        name: name.trim(),
+        phone: phone.trim(),
+        password: finalPassword,
+        role,
+        status,
+      });
       setLoading(false);
       if (!res.ok) {
         showAlert('خطأ', res.message || '');
@@ -84,18 +94,28 @@ export default function UsersScreen() {
       }
       setModalVisible(false);
     } else {
-      const res = await addUser(form);
+      const res = await addUser({
+        name: name.trim(),
+        phone: phone.trim(),
+        email: '',
+        password: finalPassword,
+        role,
+        status,
+        active: true,
+      });
       setLoading(false);
       if (!res.ok) {
         showAlert('خطأ', res.message || '');
         return;
       }
       setModalVisible(false);
-      if (form.status === 'pending') {
-        showAlert('تم الإرسال', 'تم إرسال طلب الانضمام، يحتاج إلى موافقتك من صفحة طلبات الانضمام');
-      }
+      showAlert(
+        'تم الحفظ',
+        `تم إضافة "${name.trim()}" بكلمة مرور: ${finalPassword}`
+      );
     }
   }
+
   function confirmDelete(u: AppUser) {
     showAlert('حذف مستخدم', `هل تريد حذف "${u.name}"؟`, [
       { text: 'إلغاء', style: 'cancel' },
@@ -109,14 +129,13 @@ export default function UsersScreen() {
       },
     ]);
   }
-  async function toggleActive(u: AppUser) {
-    await updateUser(u.id, { active: !u.active });
-  }
+
   async function handleApprove(u: AppUser) {
     const res = await approveUser(u.id);
     if (res.ok) showAlert('تم القبول', `تم قبول ${u.name}`);
     else showAlert('خطأ', res.message || '');
   }
+
   async function handleReject(u: AppUser) {
     const res = await rejectUser(u.id);
     if (res.ok) showAlert('تم الرفض', `تم رفض طلب ${u.name}`);
@@ -125,42 +144,30 @@ export default function UsersScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <Header
-        title="المستخدمون"
-        subtitle={`${users.length} مستخدم${pendingUsersCount > 0 ? ` • ${pendingUsersCount} بانتظار` : ''}`}
-        right={
-          <Pressable onPress={openCreate} hitSlop={8} style={styles.headerBtn}>
-            <MaterialCommunityIcons name="account-plus" size={20} color={Colors.white} />
-          </Pressable>
-        }
-      />
-
-      <View style={styles.ownerCard}>
-        <View style={[styles.avatar, { backgroundColor: ROLE_COLORS.owner.bg }]}>
-          <MaterialCommunityIcons name="shield-crown" size={22} color={ROLE_COLORS.owner.fg} />
-        </View>
-        <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-          <Text style={styles.name}>{user?.name}</Text>
-          <Text style={styles.email}>{user?.email}</Text>
-          <View style={[styles.tag, { backgroundColor: ROLE_COLORS.owner.bg, marginTop: 4 }]}>
-            <Text style={[styles.tagText, { color: ROLE_COLORS.owner.fg }]}>المالك (أنت)</Text>
-          </View>
-        </View>
-      </View>
-
-      <View style={styles.tabsRow}>
-        <FilterChip label={`الكل (${users.length})`} active={filter === 'all'} onPress={() => setFilter('all')} />
-        <FilterChip label={`بانتظار (${users.filter((u) => u.status === 'pending').length})`} active={filter === 'pending'} onPress={() => setFilter('pending')} />
-        <FilterChip label={`مقبول (${users.filter((u) => u.status === 'approved').length})`} active={filter === 'approved'} onPress={() => setFilter('approved')} />
-        <FilterChip label={`مرفوض (${users.filter((u) => u.status === 'rejected').length})`} active={filter === 'rejected'} onPress={() => setFilter('rejected')} />
-      </View>
+      <Header title="المستخدمين" subtitle={`${users.length} مستخدم`} />
 
       <FlatList
-        data={filteredUsers}
+        data={users}
         keyExtractor={(u) => u.id}
         contentContainerStyle={styles.list}
+        ListHeaderComponent={
+          <View style={styles.ownerCard}>
+            <View style={styles.ownerAvatar}>
+              <MaterialCommunityIcons name="account" size={26} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
+              <Text style={styles.ownerName}>حسابي</Text>
+              <Text style={styles.ownerPhone}>+{user?.phone || '20'}</Text>
+            </View>
+            <Text style={styles.meTag}>أنا</Text>
+          </View>
+        }
         ListEmptyComponent={
-          <EmptyState icon="account-multiple" title="لا يوجد مستخدمون" description="ابدأ بإضافة مستخدم جديد" />
+          <EmptyState
+            icon="account-multiple-outline"
+            title="لا يوجد مستخدمين"
+            description="اضغط + لإضافة مستخدم جديد"
+          />
         }
         renderItem={({ item }) => {
           const colors = ROLE_COLORS[item.role];
@@ -168,226 +175,243 @@ export default function UsersScreen() {
           const isPending = item.status === 'pending';
           return (
             <View style={[styles.card, isPending && { borderColor: Colors.warning, borderWidth: 1.5 }]}>
-              <View style={{ flexDirection: 'row-reverse', gap: 6 }}>
-                <Pressable onPress={() => confirmDelete(item)} hitSlop={8} style={styles.actBtn}>
-                  <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
-                </Pressable>
-                <Pressable onPress={() => toggleActive(item)} hitSlop={8} style={styles.actBtn}>
-                  <MaterialCommunityIcons
-                    name={item.active ? 'pause-circle-outline' : 'play-circle-outline'}
-                    size={18}
-                    color={item.active ? Colors.warning : Colors.success}
-                  />
-                </Pressable>
-                <Pressable onPress={() => openEdit(item)} hitSlop={8} style={styles.actBtn}>
-                  <MaterialCommunityIcons name="pencil-outline" size={18} color={Colors.info} />
-                </Pressable>
-              </View>
-              <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-                <Text style={styles.name}>{item.name}</Text>
-                {item.phone ? (
-                  <View style={styles.contactRow}>
-                    <Text style={styles.contactText}>{item.phone}</Text>
-                    <MaterialCommunityIcons name="cellphone" size={14} color={Colors.textMuted} />
-                  </View>
-                ) : null}
-                <Text style={styles.email}>{item.email}</Text>
-                <View style={styles.tags}>
-                  <View style={[styles.tag, { backgroundColor: colors.bg }]}>
-                    <Text style={[styles.tagText, { color: colors.fg }]}>{ROLE_LABELS[item.role]}</Text>
-                  </View>
-                  <View style={[styles.tag, { backgroundColor: statusColors.bg }]}>
-                    <Text style={[styles.tagText, { color: statusColors.fg }]}>{STATUS_LABELS[item.status]}</Text>
-                  </View>
-                  {item.active ? (
-                    <View style={[styles.tag, { backgroundColor: Colors.successSoft }]}>
-                      <Text style={[styles.tagText, { color: Colors.success }]}>نشط</Text>
-                    </View>
-                  ) : (
-                    <View style={[styles.tag, { backgroundColor: Colors.dangerSoft }]}>
-                      <Text style={[styles.tagText, { color: Colors.danger }]}>معطل</Text>
-                    </View>
-                  )}
+              <View style={styles.cardRow}>
+                <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
+                  <MaterialCommunityIcons name="account" size={24} color={colors.fg} />
                 </View>
-                <Text style={styles.meta}>أُضيف: {formatDateTime(item.createdAt)}</Text>
-                {isPending ? (
-                  <View style={styles.pendingActions}>
-                    <Button title="قبول" icon="check" size="sm" onPress={() => handleApprove(item)} />
-                    <Button title="رفض" icon="close" size="sm" variant="danger" onPress={() => handleReject(item)} />
+                <View style={{ flex: 1, marginRight: Spacing.md, alignItems: 'flex-end' }}>
+                  <Text style={styles.userName}>{item.name}</Text>
+                  {item.phone ? <Text style={styles.userPhone}>+{item.phone}</Text> : null}
+                  <View style={styles.tagsRow}>
+                    <View style={[styles.tag, { backgroundColor: colors.bg }]}>
+                      <Text style={[styles.tagText, { color: colors.fg }]}>{ROLE_LABELS[item.role]}</Text>
+                    </View>
+                    <View style={[styles.tag, { backgroundColor: statusColors.bg }]}>
+                      <Text style={[styles.tagText, { color: statusColors.fg }]}>{STATUS_LABELS[item.status]}</Text>
+                    </View>
                   </View>
-                ) : null}
+                </View>
+                <View style={styles.cardActions}>
+                  <Pressable onPress={() => openEdit(item)} hitSlop={8} style={styles.iconBtn}>
+                    <MaterialCommunityIcons name="pencil-outline" size={18} color={Colors.info} />
+                  </Pressable>
+                  <Pressable onPress={() => confirmDelete(item)} hitSlop={8} style={styles.iconBtn}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={18} color={Colors.danger} />
+                  </Pressable>
+                </View>
               </View>
-              <View style={[styles.avatar, { backgroundColor: colors.bg }]}>
-                <Text style={[styles.avatarText, { color: colors.fg }]}>{(item.name || '?').slice(0, 1)}</Text>
-              </View>
+              {isPending ? (
+                <View style={styles.pendingActions}>
+                  <Button title="قبول" icon="check" size="sm" onPress={() => handleApprove(item)} style={{ flex: 1 }} />
+                  <Button title="رفض" icon="close" size="sm" variant="danger" onPress={() => handleReject(item)} style={{ flex: 1 }} />
+                </View>
+              ) : null}
             </View>
           );
         }}
       />
 
+      {pendingUsersCount > 0 ? (
+        <View style={styles.pendingBar}>
+          <MaterialCommunityIcons name="bell-alert" size={18} color={Colors.warning} />
+          <Text style={styles.pendingBarText}>
+            {pendingUsersCount} طلب انضمام بانتظار الموافقة
+          </Text>
+        </View>
+      ) : null}
+
+      <Pressable
+        onPress={openCreate}
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+      >
+        <MaterialCommunityIcons name="plus" size={28} color={Colors.white} />
+      </Pressable>
+
       <Modal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        title={editing ? 'تعديل مستخدم' : 'إضافة مستخدم'}
+        title={editing ? 'تعديل مستخدم' : 'اضف مستخدم جديد'}
         footer={
-          <>
-            <Button title="إلغاء" variant="secondary" onPress={() => setModalVisible(false)} style={{ flex: 1 }} />
-            <Button title="حفظ" onPress={handleSubmit} loading={loading} style={{ flex: 1 }} />
-          </>
+          <Button
+            title={loading ? 'جاري الحفظ...' : 'حفظ'}
+            onPress={handleSubmit}
+            loading={loading}
+            fullWidth
+            size="lg"
+          />
         }
       >
-        <Input label="الاسم الكامل" value={form.name} onChangeText={(t) => setForm((p) => ({ ...p, name: t }))} />
         <Input
-          label="رقم الهاتف *"
-          value={form.phone}
-          onChangeText={(t) => setForm((p) => ({ ...p, phone: t }))}
-          placeholder="01xxxxxxxxx"
-          keyboardType="phone-pad"
+          label="اسم المستخدم"
+          value={name}
+          onChangeText={setName}
+          placeholder="اسم المستخدم"
         />
-        <Input
-          label="البريد الإلكتروني (اختياري)"
-          value={form.email}
-          onChangeText={(t) => setForm((p) => ({ ...p, email: t }))}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="example@domain.com"
-        />
-        <Input
-          label="كلمة المرور"
-          value={form.password}
-          onChangeText={(t) => setForm((p) => ({ ...p, password: t }))}
-          secureTextEntry
+        <PhoneField
+          label="رقم الهاتف"
+          value={phone}
+          onChangeText={setPhone}
+          placeholder="01234..."
         />
 
-        <View style={styles.hintBox}>
-          <MaterialCommunityIcons name="information" size={16} color={Colors.info} />
-          <Text style={styles.hintText}>
-            سيستخدم المستخدم رقم الهاتف وكلمة المرور لتسجيل الدخول من شاشة "تسجيل دخول المستخدمين"
-          </Text>
-        </View>
+        {!advancedVisible ? (
+          <Pressable
+            onPress={() => setAdvancedVisible(true)}
+            style={styles.moreLink}
+          >
+            <MaterialCommunityIcons name="chevron-down" size={18} color={Colors.primary} />
+            <Text style={styles.moreLinkText}>خيارات إضافية (الدور، كلمة المرور)</Text>
+          </Pressable>
+        ) : (
+          <>
+            <Input
+              label="كلمة المرور (اختياري - سيستخدم آخر 4 أرقام من الهاتف)"
+              value={password}
+              onChangeText={setPassword}
+              placeholder="••••"
+              secureTextEntry
+            />
 
-        <Text style={styles.fieldLabel}>الدور والصلاحيات</Text>
-        <View style={{ gap: Spacing.sm }}>
-          {ROLE_OPTIONS.map((role) => {
-            const a = form.role === role;
-            const colors = ROLE_COLORS[role];
-            return (
-              <Pressable
-                key={role}
-                onPress={() => setForm((p) => ({ ...p, role }))}
-                style={({ pressed }) => [styles.roleOption, a && styles.roleOptionActive, pressed && { opacity: 0.85 }]}
-              >
-                <MaterialCommunityIcons
-                  name={a ? 'radiobox-marked' : 'radiobox-blank'}
-                  size={22}
-                  color={a ? Colors.primary : Colors.textMuted}
-                />
-                <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
-                  <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 6 }}>
-                    <Text style={[styles.roleTitle, a && { color: Colors.primary }]}>{ROLE_LABELS[role]}</Text>
-                    <View style={[styles.dotTag, { backgroundColor: colors.bg }]}>
-                      <View style={[styles.dot, { backgroundColor: colors.fg }]} />
+            <Text style={styles.fieldLabel}>الدور</Text>
+            <View style={{ gap: Spacing.sm }}>
+              {ROLE_OPTIONS.map((r) => {
+                const a = role === r;
+                const colors = ROLE_COLORS[r];
+                return (
+                  <Pressable
+                    key={r}
+                    onPress={() => setRole(r)}
+                    style={[styles.roleOption, a && styles.roleOptionActive]}
+                  >
+                    <MaterialCommunityIcons
+                      name={a ? 'radiobox-marked' : 'radiobox-blank'}
+                      size={20}
+                      color={a ? Colors.primary : Colors.textMuted}
+                    />
+                    <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
+                      <Text style={[styles.roleTitle, a && { color: Colors.primary }]}>{ROLE_LABELS[r]}</Text>
+                      <Text style={styles.roleDesc}>{ROLE_DESCRIPTIONS_SHORT[r]}</Text>
                     </View>
-                  </View>
-                  <Text style={styles.roleDesc} numberOfLines={2}>{ROLE_DESCRIPTIONS[role]}</Text>
+                    <View style={[styles.dot, { backgroundColor: colors.fg }]} />
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {editing ? (
+              <>
+                <Text style={styles.fieldLabel}>حالة الحساب</Text>
+                <View style={{ flexDirection: 'row-reverse', gap: Spacing.sm }}>
+                  {(['pending', 'approved', 'rejected'] as UserStatus[]).map((s) => {
+                    const a = status === s;
+                    const sc = STATUS_COLORS[s];
+                    return (
+                      <Pressable
+                        key={s}
+                        onPress={() => setStatus(s)}
+                        style={[styles.statusChip, { backgroundColor: a ? sc.fg : sc.bg }]}
+                      >
+                        <Text style={{ color: a ? Colors.white : sc.fg, fontWeight: FontWeight.bold, fontSize: FontSize.sm }}>
+                          {STATUS_LABELS[s]}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <Text style={styles.fieldLabel}>حالة الحساب</Text>
-        <View style={{ flexDirection: 'row-reverse', gap: Spacing.sm }}>
-          {(['pending', 'approved', 'rejected'] as UserStatus[]).map((s) => {
-            const a = form.status === s;
-            const sc = STATUS_COLORS[s];
-            return (
-              <Pressable
-                key={s}
-                onPress={() => setForm((p) => ({ ...p, status: s }))}
-                style={({ pressed }) => [
-                  styles.statusChip,
-                  { backgroundColor: a ? sc.fg : sc.bg },
-                  pressed && { opacity: 0.85 },
-                ]}
-              >
-                <Text style={[styles.statusChipText, { color: a ? Colors.white : sc.fg }]}>
-                  {STATUS_LABELS[s]}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <Pressable onPress={() => setForm((p) => ({ ...p, active: !p.active }))} style={styles.checkRow}>
-          <View style={[styles.check, form.active && styles.checkActive]}>
-            {form.active ? <MaterialCommunityIcons name="check" size={14} color={Colors.white} /> : null}
-          </View>
-          <Text style={styles.checkText}>الحساب نشط</Text>
-        </Pressable>
+              </>
+            ) : null}
+          </>
+        )}
       </Modal>
     </SafeAreaView>
   );
 }
 
-function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.filterChip, active && styles.filterChipActive, pressed && { opacity: 0.85 }]}
-    >
-      <Text style={[styles.filterChipText, active && { color: Colors.white }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  headerBtn: { backgroundColor: Colors.primary, width: 40, height: 40, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
+  list: { padding: Spacing.lg, paddingBottom: 120 },
   ownerCard: {
-    flexDirection: 'row-reverse', alignItems: 'center', backgroundColor: Colors.surface,
-    margin: Spacing.lg, marginBottom: 0, padding: Spacing.lg, borderRadius: Radius.lg,
-    borderWidth: 2, borderColor: Colors.primarySoft, ...Shadow.sm,
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    marginBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
-  tabsRow: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
-  filterChip: { paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: Radius.full, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
-  filterChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  filterChipText: { color: Colors.text, fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  list: { padding: Spacing.lg, paddingTop: 0, gap: Spacing.md },
+  ownerAvatar: {
+    width: 44, height: 44, borderRadius: Radius.full,
+    borderWidth: 1.5, borderColor: Colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ownerName: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
+  ownerPhone: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  meTag: { fontSize: FontSize.md, color: Colors.success, fontWeight: FontWeight.bold },
   card: {
-    backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg,
-    borderWidth: 1, borderColor: Colors.border, marginBottom: Spacing.md,
-    flexDirection: 'row-reverse', alignItems: 'flex-start', ...Shadow.sm,
+    backgroundColor: Colors.surface,
+    borderRadius: Radius.lg,
+    padding: Spacing.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
   },
-  actBtn: { width: 36, height: 36, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  cardRow: { flexDirection: 'row-reverse', alignItems: 'center' },
   avatar: { width: 48, height: 48, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: FontSize.xl, fontWeight: FontWeight.bold },
-  name: { color: Colors.text, fontSize: FontSize.lg, fontWeight: FontWeight.bold },
-  email: { color: Colors.textSecondary, fontSize: FontSize.sm, marginTop: 2 },
-  contactRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 4, marginTop: 2 },
-  contactText: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium },
-  tags: { flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+  userName: { fontSize: FontSize.md, fontWeight: FontWeight.bold, color: Colors.text },
+  userPhone: { fontSize: FontSize.sm, color: Colors.textSecondary, marginTop: 2 },
+  tagsRow: { flexDirection: 'row-reverse', gap: 4, marginTop: 6 },
   tag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: Radius.full },
-  tagText: { fontSize: FontSize.xs, fontWeight: FontWeight.semibold },
-  meta: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 6 },
-  pendingActions: { flexDirection: 'row-reverse', gap: Spacing.sm, marginTop: Spacing.sm },
-  hintBox: {
-    flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 8,
-    backgroundColor: Colors.infoSoft, padding: Spacing.sm, borderRadius: Radius.md,
-    borderWidth: 1, borderColor: Colors.info, marginTop: Spacing.sm,
+  tagText: { fontSize: 11, fontWeight: FontWeight.semibold },
+  cardActions: { flexDirection: 'row-reverse', gap: 6 },
+  iconBtn: { width: 32, height: 32, borderRadius: Radius.full, backgroundColor: Colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' },
+  pendingActions: { flexDirection: 'row-reverse', gap: Spacing.sm, marginTop: Spacing.md },
+  pendingBar: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.warningSoft,
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: Colors.warning,
   },
-  hintText: { flex: 1, color: Colors.info, fontSize: FontSize.xs, textAlign: 'right', lineHeight: 18 },
+  pendingBarText: { color: Colors.warning, fontSize: FontSize.sm, fontWeight: FontWeight.semibold, flex: 1, textAlign: 'right' },
+  fab: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    width: 60,
+    height: 60,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primaryDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Shadow.md,
+  },
+  moreLink: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: Spacing.sm,
+  },
+  moreLinkText: { color: Colors.primary, fontWeight: FontWeight.semibold, fontSize: FontSize.sm },
   fieldLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: FontWeight.medium, textAlign: 'right', marginTop: Spacing.sm },
-  roleOption: { flexDirection: 'row-reverse', alignItems: 'center', padding: Spacing.md, backgroundColor: Colors.surfaceAlt, borderRadius: Radius.md, borderWidth: 1.5, borderColor: 'transparent' },
+  roleOption: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    padding: Spacing.md,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    gap: 8,
+  },
   roleOptionActive: { backgroundColor: Colors.primaryTint, borderColor: Colors.primary },
-  roleTitle: { color: Colors.text, fontWeight: FontWeight.bold, fontSize: FontSize.md },
-  roleDesc: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 2, textAlign: 'right' },
-  dotTag: { width: 14, height: 14, borderRadius: Radius.full, alignItems: 'center', justifyContent: 'center' },
-  dot: { width: 6, height: 6, borderRadius: Radius.full },
-  statusChip: { flex: 1, paddingHorizontal: Spacing.md, paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
-  statusChipText: { fontSize: FontSize.sm, fontWeight: FontWeight.bold },
-  checkRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, marginTop: Spacing.lg },
-  check: { width: 22, height: 22, borderRadius: Radius.sm, borderWidth: 2, borderColor: Colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
-  checkActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  checkText: { color: Colors.text, fontSize: FontSize.sm },
+  roleTitle: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.bold },
+  roleDesc: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 2 },
+  dot: { width: 10, height: 10, borderRadius: Radius.full },
+  statusChip: { flex: 1, paddingHorizontal: 8, paddingVertical: 10, borderRadius: Radius.md, alignItems: 'center' },
 });
