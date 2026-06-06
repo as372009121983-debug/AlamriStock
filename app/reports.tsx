@@ -6,12 +6,12 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '@/hooks/useStore';
 import { Header } from '@/components/ui/Header';
+import { Modal } from '@/components/ui/Modal';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { formatCurrency, isSameDay } from '@/services/format';
+import { formatCurrency } from '@/services/format';
 
 type IconName = keyof typeof MaterialCommunityIcons.glyphMap;
-
-type ReportItem = { label: string; route?: string; comingSoon?: boolean };
+type ReportItem = { label: string; type?: string; comingSoon?: boolean };
 
 type Section = {
   key: string;
@@ -22,18 +22,22 @@ type Section = {
   items: ReportItem[];
 };
 
-type Period = 'today' | 'yesterday' | 'thisMonth' | 'lastMonth' | 'thisYear';
+type Period = 'today' | 'yesterday' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'all';
 
-const PERIODS: { key: Period; label: string }[] = [
-  { key: 'today', label: 'اليوم' },
-  { key: 'yesterday', label: 'امس' },
-  { key: 'thisMonth', label: 'الشهر الحالي' },
-  { key: 'lastMonth', label: 'الشهر الماضي' },
-  { key: 'thisYear', label: 'العام الحالي' },
-];
+const PERIOD_LABELS: Record<Period, string> = {
+  today: 'اليوم',
+  yesterday: 'امس',
+  thisMonth: 'الشهر الحالي',
+  lastMonth: 'الشهر الماضي',
+  thisYear: 'العام الحالي',
+  all: 'كل الفترات',
+};
+
+const PERIODS: Period[] = ['today', 'yesterday', 'thisMonth', 'lastMonth', 'thisYear'];
 
 function periodRange(p: Period): { from: number; to: number } {
   const now = new Date();
+  if (p === 'all') return { from: 0, to: Number.MAX_SAFE_INTEGER };
   if (p === 'today') {
     const start = new Date(now); start.setHours(0, 0, 0, 0);
     return { from: start.getTime(), to: now.getTime() };
@@ -52,31 +56,33 @@ function periodRange(p: Period): { from: number; to: number } {
     const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
     return { from: start.getTime(), to: end.getTime() };
   }
-  // thisYear
   const start = new Date(now.getFullYear(), 0, 1);
   return { from: start.getTime(), to: now.getTime() };
 }
 
 export default function ReportsScreen() {
   const router = useRouter();
-  const { sales, purchases, expenses, customerPayments, settings, saleReturns } = useStore();
+  const { sales, purchases, expenses, settings, saleReturns } = useStore();
 
   const [view, setView] = useState<'summary' | 'detailed'>('summary');
-  const [tab, setTab] = useState<'sales' | 'profits' | 'expenses' | 'purchases'>('sales');
-  const [expanded, setExpanded] = useState<string>('sales');
+  const [tab, setTab] = useState<'sales' | 'profits' | 'sales-grouped' | 'purchases-grouped'>('sales');
+  const [expanded, setExpanded] = useState<string>('');
+  const [period, setPeriod] = useState<Period>('today');
+  const [periodPickerVisible, setPeriodPickerVisible] = useState(false);
 
   const summaries = useMemo(() => {
     const result: Record<string, Record<Period, number>> = {
       sales: {} as Record<Period, number>,
       profits: {} as Record<Period, number>,
-      expenses: {} as Record<Period, number>,
-      purchases: {} as Record<Period, number>,
+      'sales-grouped': {} as Record<Period, number>,
+      'purchases-grouped': {} as Record<Period, number>,
     };
     for (const p of PERIODS) {
-      const { from, to } = periodRange(p.key);
+      const { from, to } = periodRange(p);
       const inRange = (d: number) => d >= from && d <= to;
       const periodSales = sales.filter((s) => inRange(s.date));
       const periodReturns = saleReturns.filter((r) => inRange(r.date));
+      const periodPurchases = purchases.filter((pp) => inRange(pp.date));
       const salesTotal = periodSales.reduce((s, sa) => s + sa.total, 0);
       const cost = periodSales.reduce(
         (s, sa) => s + sa.items.reduce((c, it) => c + it.purchasePrice * it.quantity, 0),
@@ -87,13 +93,13 @@ export default function ReportsScreen() {
         0
       );
       const returnsTotal = periodReturns.reduce((s, r) => s + r.total, 0);
-      result.sales[p.key] = salesTotal;
-      result.profits[p.key] = salesTotal - cost - (returnsTotal - returnsCost);
-      result.expenses[p.key] = expenses.filter((e) => inRange(e.date)).reduce((s, e) => s + e.amount, 0);
-      result.purchases[p.key] = purchases.filter((pp) => inRange(pp.date)).reduce((s, pp) => s + pp.total, 0);
+      result.sales[p] = salesTotal;
+      result.profits[p] = salesTotal - cost - (returnsTotal - returnsCost);
+      result['sales-grouped'][p] = salesTotal - returnsTotal;
+      result['purchases-grouped'][p] = periodPurchases.reduce((s, pp) => s + pp.total, 0);
     }
     return result;
-  }, [sales, purchases, expenses, customerPayments, saleReturns]);
+  }, [sales, purchases, saleReturns]);
 
   const sections: Section[] = [
     {
@@ -103,10 +109,10 @@ export default function ReportsScreen() {
       color: Colors.primary,
       bg: Colors.primarySoft,
       items: [
-        { label: 'تقرير مبيعات مفصل', route: '/(tabs)/sales' },
-        { label: 'تقرير مبيعات مجمل', route: '/(tabs)/sales' },
-        { label: 'تقرير مبيعات بالتصنيف', comingSoon: true },
-        { label: 'تقرير الفواتير الغير مسددة', comingSoon: true },
+        { label: 'تقرير مبيعات مفصل', type: 'sales-detailed' },
+        { label: 'تقرير مبيعات مجمل', type: 'sales-summary' },
+        { label: 'تقرير مبيعات بالتصنيف', type: 'sales-by-category' },
+        { label: 'تقرير الفواتير الغير مسددة', type: 'unpaid-invoices' },
       ],
     },
     {
@@ -116,9 +122,9 @@ export default function ReportsScreen() {
       color: Colors.success,
       bg: Colors.successSoft,
       items: [
-        { label: 'الأرباح حسب الفترة', route: '/profits' },
-        { label: 'الأرباح حسب المنتج', route: '/profits' },
-        { label: 'الأرباح حسب الفاتورة', route: '/profits' },
+        { label: 'تقرير ارباح مفصل', type: 'profits-detailed' },
+        { label: 'تقرير ارباح مجمل', type: 'profits-summary' },
+        { label: 'تقرير ارباح الفواتير', type: 'profits-invoices' },
       ],
     },
     {
@@ -128,9 +134,10 @@ export default function ReportsScreen() {
       color: Colors.info,
       bg: Colors.infoSoft,
       items: [
-        { label: 'قائمة العملاء', route: '/(tabs)/customers' },
-        { label: 'دفعات العملاء', route: '/customer-payments' },
-        { label: 'مديونيات العملاء', route: '/(tabs)/customers' },
+        { label: 'تقرير مديونية العملاء', type: 'customers-debt' },
+        { label: 'تقرير المنتجات المباعة لعميل', type: 'customers-products' },
+        { label: 'تقرير كشف حساب عميل', type: 'customers-statement' },
+        { label: 'تقرير اجمالي مبيعات العملاء', type: 'customers-total-sales' },
       ],
     },
     {
@@ -140,8 +147,10 @@ export default function ReportsScreen() {
       color: Colors.warning,
       bg: Colors.warningSoft,
       items: [
-        { label: 'تقرير المشتريات', route: '/purchases' },
-        { label: 'مرتجعات الشراء', route: '/purchase-returns' },
+        { label: 'تقرير مشتريات مفصل', type: 'purchases-detailed' },
+        { label: 'تقرير مشتريات مجمل', type: 'purchases-summary' },
+        { label: 'تقرير مشتريات بالتصنيف', type: 'purchases-by-category' },
+        { label: 'تقرير الفواتير الغير مسددة', type: 'purchases-unpaid' },
       ],
     },
     {
@@ -151,10 +160,10 @@ export default function ReportsScreen() {
       color: Colors.warning,
       bg: Colors.warningSoft,
       items: [
-        { label: 'تقرير مديونية الموردين', route: '/suppliers' },
-        { label: 'تقرير المنتجات المباعة لمورد', comingSoon: true },
-        { label: 'تقرير كشف حساب مورد', comingSoon: true },
-        { label: 'تقرير اجمالي مشتريات الموردين', route: '/purchases' },
+        { label: 'تقرير مديونية الموردين', type: 'suppliers-debt' },
+        { label: 'تقرير المنتجات المباعة لمورد', type: 'suppliers-products' },
+        { label: 'تقرير كشف حساب مورد', type: 'suppliers-statement' },
+        { label: 'تقرير اجمالي مشتريات الموردين', type: 'suppliers-total-purchases' },
       ],
     },
     {
@@ -164,9 +173,10 @@ export default function ReportsScreen() {
       color: Colors.primary,
       bg: Colors.primarySoft,
       items: [
-        { label: 'تقرير الجرد', route: '/inventory' },
-        { label: 'تقرير التحويلات', route: '/transfers' },
-        { label: 'إدارة المخازن', route: '/warehouses' },
+        { label: 'جرد مفصل', type: 'inventory-detailed' },
+        { label: 'جرد مجمل', type: 'inventory-summary' },
+        { label: 'تقرير المنتجات منخفضة الكمية مفصل', type: 'low-stock-detailed' },
+        { label: 'تقرير المنتجات منخفضة الكمية مجمل', type: 'low-stock-summary' },
       ],
     },
     {
@@ -176,26 +186,14 @@ export default function ReportsScreen() {
       color: Colors.danger,
       bg: Colors.dangerSoft,
       items: [
-        { label: 'تقرير المصروفات', route: '/expenses' },
-        { label: 'اليومية', route: '/journal' },
-      ],
-    },
-    {
-      key: 'workers',
-      title: 'العمال',
-      icon: 'account-cash-outline',
-      color: Colors.info,
-      bg: Colors.infoSoft,
-      items: [
-        { label: 'قبض العمال', route: '/workers' },
-        { label: 'سلفات العمال', route: '/worker-advances' },
+        { label: 'تقرير المصروفات', type: 'expenses-report' },
       ],
     },
   ];
 
   function handleItem(item: ReportItem) {
-    if (item.comingSoon) return;
-    if (item.route) router.push(item.route as any);
+    if (item.comingSoon || !item.type) return;
+    router.push(`/report-view?type=${item.type}` as any);
   }
 
   return (
@@ -225,8 +223,8 @@ export default function ReportsScreen() {
             {[
               { key: 'sales', label: 'المبيعات' },
               { key: 'profits', label: 'الارباح' },
-              { key: 'expenses', label: 'المصروفات' },
-              { key: 'purchases', label: 'المشتريات' },
+              { key: 'sales-grouped', label: 'بيانات مجمعة للمبيعات' },
+              { key: 'purchases-grouped', label: 'بيانات مجمعة للمشتريات' },
             ].map((t) => (
               <Pressable
                 key={t.key}
@@ -246,14 +244,17 @@ export default function ReportsScreen() {
 
           <ScrollView contentContainerStyle={styles.summaryContent} showsVerticalScrollIndicator={false}>
             {PERIODS.map((p) => {
-              const value = summaries[tab]?.[p.key] || 0;
+              const value = summaries[tab]?.[p] || 0;
               return (
-                <View key={p.key} style={styles.periodCard}>
+                <View key={p} style={styles.periodCard}>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={styles.periodLabel}>{p.label}</Text>
-                    <Text style={styles.periodValue}>
-                      {formatCurrency(value, settings.currency)}
-                    </Text>
+                    <Text style={styles.periodLabel}>{PERIOD_LABELS[p]}</Text>
+                    <View style={{ flexDirection: 'row-reverse', alignItems: 'baseline', gap: 4 }}>
+                      <Text style={styles.periodValue}>
+                        {Math.round(value).toLocaleString('en-US')}
+                      </Text>
+                      <Text style={styles.periodCurrency}>{settings.currency || 'جنيه'}</Text>
+                    </View>
                   </View>
                 </View>
               );
@@ -273,13 +274,10 @@ export default function ReportsScreen() {
                   <MaterialCommunityIcons
                     name={isOpen ? 'chevron-up' : 'chevron-down'}
                     size={22}
-                    color={Colors.primary}
+                    color="#7c4dff"
                   />
                   <View style={{ flex: 1, alignItems: 'flex-end', marginRight: Spacing.md }}>
                     <Text style={styles.sectionTitle}>{section.title}</Text>
-                  </View>
-                  <View style={[styles.sectionIcon, { backgroundColor: section.bg }]}>
-                    <MaterialCommunityIcons name={section.icon} size={22} color={section.color} />
                   </View>
                 </Pressable>
                 {isOpen ? (
@@ -294,13 +292,6 @@ export default function ReportsScreen() {
                           pressed && { backgroundColor: Colors.surfaceAlt },
                         ]}
                       >
-                        {item.comingSoon ? (
-                          <View style={styles.soonBadge}>
-                            <Text style={styles.soonBadgeText}>قريباً</Text>
-                          </View>
-                        ) : (
-                          <MaterialCommunityIcons name="chevron-left" size={18} color={Colors.textMuted} />
-                        )}
                         <Text style={[styles.itemLabel, item.comingSoon && { color: Colors.textMuted }]}>
                           {item.label}
                         </Text>
@@ -315,24 +306,53 @@ export default function ReportsScreen() {
       )}
 
       <View style={styles.bottomBar}>
-        <View style={styles.dateBtn}>
+        <Pressable
+          onPress={() => setPeriodPickerVisible(true)}
+          style={styles.dateBtn}
+          hitSlop={6}
+        >
           <MaterialCommunityIcons name="calendar" size={18} color={Colors.primary} />
-        </View>
-        <View style={styles.todayBtn}>
+        </Pressable>
+        <Pressable
+          onPress={() => setPeriodPickerVisible(true)}
+          style={styles.todayBtn}
+          hitSlop={6}
+        >
+          <Text style={styles.todayText}>{PERIOD_LABELS[period]}</Text>
           <MaterialCommunityIcons name="chevron-down" size={18} color={Colors.text} />
-          <Text style={styles.todayText}>اليوم</Text>
-        </View>
+        </Pressable>
       </View>
+
+      <Modal
+        visible={periodPickerVisible}
+        onClose={() => setPeriodPickerVisible(false)}
+        title="اختر الفترة"
+      >
+        {(['today', 'yesterday', 'thisMonth', 'lastMonth', 'thisYear', 'all'] as Period[]).map((p) => (
+          <Pressable
+            key={p}
+            onPress={() => {
+              setPeriod(p);
+              setPeriodPickerVisible(false);
+            }}
+            style={styles.menuRow}
+          >
+            <MaterialCommunityIcons
+              name={period === p ? 'check-circle' : 'circle-outline'}
+              size={22}
+              color={period === p ? Colors.primary : Colors.textMuted}
+            />
+            <Text style={styles.menuLabel}>{PERIOD_LABELS[p]}</Text>
+          </Pressable>
+        ))}
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  toggleBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-  },
+  toggleBtn: { paddingVertical: 6, paddingHorizontal: 8 },
   toggleText: { color: Colors.primary, fontWeight: FontWeight.semibold, fontSize: FontSize.sm, textDecorationLine: 'underline' },
   tabsRow: {
     paddingHorizontal: Spacing.lg,
@@ -340,73 +360,48 @@ const styles = StyleSheet.create({
     gap: Spacing.lg,
     flexDirection: 'row-reverse',
   },
-  tab: {
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-  },
-  tabActive: {
-    borderBottomWidth: 2.5,
-    borderBottomColor: Colors.primary,
-  },
+  tab: { paddingVertical: 8, paddingHorizontal: 4 },
+  tabActive: { borderBottomWidth: 2.5, borderBottomColor: Colors.primary },
   tabText: { color: Colors.textSecondary, fontWeight: FontWeight.medium, fontSize: FontSize.md },
   tabTextActive: { color: Colors.primary, fontWeight: FontWeight.bold },
-  summaryContent: {
-    padding: Spacing.lg,
-    paddingBottom: 100,
-    gap: Spacing.md,
-  },
+  summaryContent: { padding: Spacing.lg, paddingBottom: 100, gap: Spacing.md },
   periodCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
     padding: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    minHeight: 110,
     alignItems: 'flex-end',
+    justifyContent: 'flex-start',
     ...Shadow.sm,
   },
   periodLabel: { color: Colors.textSecondary, fontSize: FontSize.md, fontWeight: FontWeight.medium },
-  periodValue: { color: Colors.primary, fontSize: FontSize.xxl, fontWeight: FontWeight.bold, marginTop: 4 },
-  detailedContent: {
-    padding: Spacing.lg,
-    paddingBottom: 100,
-    gap: Spacing.md,
-  },
+  periodValue: { color: Colors.primary, fontSize: 32, fontWeight: FontWeight.bold, marginTop: 4 },
+  periodCurrency: { color: Colors.primary, fontSize: FontSize.lg, fontWeight: FontWeight.semibold },
+  detailedContent: { padding: Spacing.lg, paddingBottom: 100, gap: Spacing.md },
   sectionCard: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
     overflow: 'hidden',
     ...Shadow.sm,
   },
   sectionHeader: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
-    padding: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.lg,
   },
-  sectionIcon: {
-    width: 40, height: 40, borderRadius: Radius.md,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  sectionTitle: { fontSize: FontSize.lg, fontWeight: FontWeight.bold, color: Colors.text },
+  sectionTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.medium, color: Colors.text },
   sectionItems: { borderTopWidth: 1, borderTopColor: Colors.border },
   itemRow: {
-    flexDirection: 'row-reverse',
-    alignItems: 'center',
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.lg,
+    paddingHorizontal: Spacing.xl,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
-    minHeight: 56,
+    minHeight: 60,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
   },
-  itemLabel: { flex: 1, color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.medium, textAlign: 'right' },
-  soonBadge: {
-    backgroundColor: Colors.surfaceAlt,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: Radius.sm,
-  },
-  soonBadgeText: { color: Colors.textMuted, fontSize: 10, fontWeight: FontWeight.bold },
+  itemLabel: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.medium, textAlign: 'right' },
   bottomBar: {
     flexDirection: 'row-reverse',
     justifyContent: 'space-between',
@@ -430,4 +425,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   todayText: { color: Colors.text, fontSize: FontSize.md, fontWeight: FontWeight.medium },
+  menuRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.sm,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  menuLabel: { flex: 1, color: Colors.text, fontSize: FontSize.md, textAlign: 'right' },
 });
