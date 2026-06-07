@@ -21,12 +21,24 @@ import { Header } from '@/components/ui/Header';
 import { useStore } from '@/hooks/useStore';
 import { useAlert, getSupabaseClient } from '@/template';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { speakArabic, silenceVoice, isSpeaking } from '@/services/notify';
+import {
+  speakArabic,
+  silenceVoice,
+  isSpeaking,
+  isTtsSupported,
+} from '@/services/notify';
 import {
   startRecording,
   stopRecording,
   cancelRecording,
+  isNativeRecordingSupported,
 } from '@/services/voice-recording';
+import {
+  startWebRecognition,
+  stopWebRecognition,
+  abortWebRecognition,
+  isWebSpeechSupported,
+} from '@/services/web-speech';
 import { isSameDay, isSameMonth } from '@/services/format';
 
 type Message = {
@@ -44,6 +56,8 @@ const SUGGESTIONS = [
   'حلل لي أداء هذا الشهر',
 ];
 
+const isWeb = Platform.OS === 'web';
+
 export default function AIAssistantScreen() {
   const { products, customers, suppliers, sales, expenses, settings } = useStore();
   const { showAlert } = useAlert();
@@ -52,22 +66,32 @@ export default function AIAssistantScreen() {
   const recordIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveModeRef = useRef(false);
   const cancelledRef = useRef(false);
+  const partialRef = useRef('');
 
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       role: 'assistant',
-      text: 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك، أو اضغط على الميكروفون وكلمني صوتياً، أو فعّل وضع المحادثة الحية.',
+      text: isWeb
+        ? 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك بالكتابة، أو اضغط على الميكروفون وكلمني صوتياً، أو فعّل وضع المحادثة الحية.'
+        : 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك أو اطلب نصائح ذكية.',
       ts: Date.now(),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [voiceOn, setVoiceOn] = useState<boolean>(settings.voiceEnabled !== false);
+  const [voiceOn, setVoiceOn] = useState<boolean>(
+    settings.voiceEnabled !== false && isTtsSupported()
+  );
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [processing, setProcessing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
+  const [partialTranscript, setPartialTranscript] = useState('');
+
+  const voiceInputAvailable = isWeb
+    ? isWebSpeechSupported()
+    : isNativeRecordingSupported();
 
   // Live business data summary
   const businessContext = useMemo(() => {
@@ -103,7 +127,7 @@ export default function AIAssistantScreen() {
     sales.forEach((s) => {
       s.items.forEach((it) => {
         const cur = productSales.get(it.productId) || { name: it.name, total: 0 };
-        cur.total += it.salePrice * it.quantity;
+        cur.total += it.price * it.quantity;
         productSales.set(it.productId, cur);
       });
     });
@@ -161,7 +185,8 @@ export default function AIAssistantScreen() {
       cancelledRef.current = true;
       liveModeRef.current = false;
       silenceVoice();
-      cancelRecording();
+      if (isWeb) abortWebRecognition();
+      else cancelRecording();
       if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
     };
   }, []);
@@ -189,7 +214,22 @@ export default function AIAssistantScreen() {
     }
   }, [recording, pulseAnim]);
 
-  async function send(text?: string) {
+  function clearRecordingTimer() {
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+  }
+
+  function startRecordingTimer() {
+    clearRecordingTimer();
+    setDuration(0);
+    recordIntervalRef.current = setInterval(() => {
+      setDuration((d) => d + 1);
+    }, 1000);
+  }
+
+  async function send(text?: string, isVoice: boolean = false) {
     const question = (text ?? input).trim();
     if (!question || loading) return;
 
@@ -198,9 +238,10 @@ export default function AIAssistantScreen() {
       role: 'user',
       text: question,
       ts: Date.now(),
+      voice: isVoice,
     };
     setMessages((prev) => [...prev, userMsg]);
-    setInput('');
+    if (!isVoice) setInput('');
     setLoading(true);
 
     try {
@@ -210,7 +251,7 @@ export default function AIAssistantScreen() {
           question,
           context: businessContext,
           history: messages.slice(-8).map((m) => ({ role: m.role, text: m.text })),
-          voice: voiceOn,
+          voice: voiceOn || isVoice,
         },
       });
 
@@ -238,21 +279,43 @@ export default function AIAssistantScreen() {
         role: 'assistant',
         text: reply,
         ts: Date.now(),
+        voice: isVoice,
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      if (voiceOn) {
+      // Always speak if voice toggle on, OR if user used voice input
+      if (voiceOn || isVoice) {
         const spoken = reply.length > 600 ? reply.slice(0, 600) + '...' : reply;
         speakArabic(spoken);
+      }
+
+      // Live mode: auto-listen again after AI finishes speaking
+      if (isVoice && liveModeRef.current && !cancelledRef.current) {
+        let waited = 0;
+        const max = 25000;
+        while (waited < max && (await isSpeaking())) {
+          await new Promise((r) => setTimeout(r, 250));
+          waited += 250;
+        }
+        await new Promise((r) => setTimeout(r, 400));
+        if (liveModeRef.current && !cancelledRef.current) {
+          handleStartRecord();
+        }
       }
     } catch (e: any) {
       const errorMsg: Message = {
         id: `e_${Date.now()}`,
         role: 'assistant',
-        text: `حدث خطأ في الاتصال: ${e?.message || 'تعذر الوصول للذكاء الاصطناعي'}. تأكد من الاتصال بالإنترنت.`,
+        text: `حدث خطأ في الاتصال: ${
+          e?.message || 'تعذر الوصول للذكاء الاصطناعي'
+        }. تأكد من الاتصال بالإنترنت ثم حاول مرة أخرى.`,
         ts: Date.now(),
       };
       setMessages((prev) => [...prev, errorMsg]);
+      if (liveModeRef.current) {
+        liveModeRef.current = false;
+        setLiveMode(false);
+      }
     } finally {
       setLoading(false);
     }
@@ -260,32 +323,112 @@ export default function AIAssistantScreen() {
 
   async function handleStartRecord() {
     if (recording || processing || loading) return;
+    if (!voiceInputAvailable) {
+      showAlert(
+        'الميكروفون غير متاح',
+        isWeb
+          ? 'متصفحك لا يدعم التعرف على الصوت. استخدم Chrome أو Safari أو Edge.'
+          : 'الميكروفون غير متاح على هذا الجهاز'
+      );
+      return;
+    }
     silenceVoice();
+    partialRef.current = '';
+    setPartialTranscript('');
+
+    if (isWeb) {
+      // Web: Use SpeechRecognition (no audio upload)
+      setRecording(true);
+      startRecordingTimer();
+
+      const result = await startWebRecognition({
+        onStart: () => {
+          // Recognition started
+        },
+        onPartial: (text) => {
+          partialRef.current = text;
+          setPartialTranscript(text);
+        },
+        onResult: (text) => {
+          setRecording(false);
+          clearRecordingTimer();
+          setDuration(0);
+          setPartialTranscript('');
+          if (text && text.length > 0) {
+            send(text, true);
+          } else if (liveModeRef.current) {
+            // No speech detected in live mode, retry once after delay
+            setTimeout(() => {
+              if (liveModeRef.current && !cancelledRef.current) {
+                handleStartRecord();
+              }
+            }, 600);
+          }
+        },
+        onError: (error) => {
+          setRecording(false);
+          clearRecordingTimer();
+          setDuration(0);
+          setPartialTranscript('');
+          if (error && error.length > 0) {
+            showAlert('تعذر التعرف على الصوت', error);
+            liveModeRef.current = false;
+            setLiveMode(false);
+          }
+        },
+        onEnd: () => {
+          setRecording(false);
+          clearRecordingTimer();
+          setPartialTranscript('');
+        },
+      });
+
+      if (!result.ok) {
+        setRecording(false);
+        clearRecordingTimer();
+        setDuration(0);
+        showAlert('غير متاح', result.error || 'لا يمكن استخدام الميكروفون');
+        liveModeRef.current = false;
+        setLiveMode(false);
+      }
+      return;
+    }
+
+    // Native: Use audio recording
     const result = await startRecording();
     if (!result.ok) {
       showAlert('تعذر التسجيل', result.error || 'لم يتم منح إذن الميكروفون');
-      // Disable live mode if mic permission denied
       liveModeRef.current = false;
       setLiveMode(false);
       return;
     }
     setRecording(true);
-    setDuration(0);
-    if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
-    recordIntervalRef.current = setInterval(() => {
-      setDuration((d) => d + 1);
-    }, 1000);
+    startRecordingTimer();
   }
 
   async function handleStopRecord(shouldSend = true) {
     if (!recording) return;
-    setRecording(false);
-    if (recordIntervalRef.current) {
-      clearInterval(recordIntervalRef.current);
-      recordIntervalRef.current = null;
+
+    if (isWeb) {
+      // Web: stop recognition (will trigger onResult or onEnd)
+      if (shouldSend) {
+        stopWebRecognition();
+      } else {
+        abortWebRecognition();
+        setRecording(false);
+        clearRecordingTimer();
+        setDuration(0);
+        setPartialTranscript('');
+      }
+      return;
     }
+
+    // Native: stop audio recording
+    setRecording(false);
+    clearRecordingTimer();
     const result = await stopRecording();
     setDuration(0);
+
     if (!result.ok || !result.base64) {
       if (shouldSend) showAlert('تعذر التسجيل', result.error || 'حدث خطأ');
       return;
@@ -302,14 +445,17 @@ export default function AIAssistantScreen() {
   async function handleCancelRecord() {
     if (!recording) return;
     setRecording(false);
-    if (recordIntervalRef.current) {
-      clearInterval(recordIntervalRef.current);
-      recordIntervalRef.current = null;
-    }
-    await cancelRecording();
+    clearRecordingTimer();
     setDuration(0);
+    setPartialTranscript('');
+    if (isWeb) {
+      abortWebRecognition();
+    } else {
+      await cancelRecording();
+    }
   }
 
+  // Native-only: send audio bytes to ai-voice-chat
   async function sendVoice(base64: string, format: string) {
     setProcessing(true);
     try {
@@ -360,20 +506,16 @@ export default function AIAssistantScreen() {
       };
       setMessages((prev) => [...prev, userMsg, aiMsg]);
 
-      // Always speak the reply for voice queries
       const spoken = reply.length > 600 ? reply.slice(0, 600) + '...' : reply;
       speakArabic(spoken);
 
-      // Live mode: auto-listen again after AI finishes speaking
       if (liveModeRef.current && !cancelledRef.current) {
-        // Wait for speech to finish, then start a new recording
         let waited = 0;
         const max = 25000;
         while (waited < max && (await isSpeaking())) {
           await new Promise((r) => setTimeout(r, 250));
           waited += 250;
         }
-        // Brief pause for natural flow
         await new Promise((r) => setTimeout(r, 400));
         if (liveModeRef.current && !cancelledRef.current && !processing) {
           handleStartRecord();
@@ -385,11 +527,10 @@ export default function AIAssistantScreen() {
         role: 'assistant',
         text: `تعذر معالجة الرسالة الصوتية: ${
           e?.message || 'حاول مرة أخرى'
-        }. تأكد من الاتصال بالإنترنت أو جرب الكتابة بدلاً من الصوت.`,
+        }. جرب الكتابة بدلاً من الصوت.`,
         ts: Date.now(),
       };
       setMessages((prev) => [...prev, errorMsg]);
-      // Stop live mode on error
       liveModeRef.current = false;
       setLiveMode(false);
     } finally {
@@ -406,7 +547,7 @@ export default function AIAssistantScreen() {
       {
         id: 'welcome',
         role: 'assistant',
-        text: 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك، أو اضغط على الميكروفون وكلمني صوتياً.',
+        text: 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني أي شيء عن متجرك.',
         ts: Date.now(),
       },
     ]);
@@ -418,17 +559,23 @@ export default function AIAssistantScreen() {
   }
 
   async function toggleLiveMode() {
+    if (!voiceInputAvailable) {
+      showAlert(
+        'غير متاح',
+        isWeb
+          ? 'متصفحك لا يدعم التعرف على الصوت. استخدم Chrome أو Safari أو Edge.'
+          : 'الميكروفون غير متاح على هذا الجهاز'
+      );
+      return;
+    }
     if (liveModeRef.current) {
-      // Turn off
       liveModeRef.current = false;
       setLiveMode(false);
       silenceVoice();
       await handleCancelRecord();
     } else {
-      // Turn on
       liveModeRef.current = true;
       setLiveMode(true);
-      // Start recording right away
       setTimeout(() => handleStartRecord(), 150);
     }
   }
@@ -448,6 +595,8 @@ export default function AIAssistantScreen() {
             ? 'وضع المحادثة الحية نشط'
             : processing
             ? 'يستمع ويفكر...'
+            : recording
+            ? 'يستمع الآن...'
             : 'مدعوم بالذكاء الاصطناعي'
         }
         right={
@@ -495,27 +644,31 @@ export default function AIAssistantScreen() {
             <Text style={styles.heroSub}>
               {liveMode
                 ? 'كلّم بشكل طبيعي. الميكروفون يستمع تلقائياً بعد كل رد.'
-                : 'اضغط الميكروفون وكلمني، أو فعّل المحادثة الحية للاستمرار في الكلام'}
+                : voiceInputAvailable
+                ? 'اضغط الميكروفون وكلمني، أو فعّل المحادثة الحية للكلام المستمر'
+                : 'اكتب سؤالك في الأسفل وسأجيبك بذكاء'}
             </Text>
 
-            <Pressable
-              onPress={toggleLiveMode}
-              style={[styles.liveModeBtn, liveMode && styles.liveModeBtnActive]}
-            >
-              <MaterialCommunityIcons
-                name={liveMode ? 'phone-hangup' : 'phone-in-talk'}
-                size={18}
-                color={liveMode ? Colors.danger : Colors.white}
-              />
-              <Text
-                style={[
-                  styles.liveModeText,
-                  liveMode && { color: Colors.danger },
-                ]}
+            {voiceInputAvailable ? (
+              <Pressable
+                onPress={toggleLiveMode}
+                style={[styles.liveModeBtn, liveMode && styles.liveModeBtnActive]}
               >
-                {liveMode ? 'إنهاء المكالمة' : 'بدء محادثة حية'}
-              </Text>
-            </Pressable>
+                <MaterialCommunityIcons
+                  name={liveMode ? 'phone-hangup' : 'phone-in-talk'}
+                  size={18}
+                  color={liveMode ? Colors.danger : Colors.white}
+                />
+                <Text
+                  style={[
+                    styles.liveModeText,
+                    liveMode && { color: Colors.danger },
+                  ]}
+                >
+                  {liveMode ? 'إنهاء المكالمة' : 'بدء محادثة حية'}
+                </Text>
+              </Pressable>
+            ) : null}
           </LinearGradient>
 
           {messages.map((m) => (
@@ -566,7 +719,7 @@ export default function AIAssistantScreen() {
             </View>
           ))}
 
-          {(loading || processing) ? (
+          {loading || processing ? (
             <View style={[styles.bubble, styles.bubbleAssistant]}>
               <View style={styles.assistantHeader}>
                 <View style={styles.assistantAvatar}>
@@ -639,7 +792,11 @@ export default function AIAssistantScreen() {
                 },
               ]}
             />
-            <Text style={styles.recText}>يجري التسجيل...</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.recText}>
+                {partialTranscript ? partialTranscript : 'يستمع...'}
+              </Text>
+            </View>
             <Text style={styles.recTimer}>{formatDuration(duration)}</Text>
             <Pressable
               onPress={() => handleStopRecord(true)}
@@ -652,23 +809,25 @@ export default function AIAssistantScreen() {
         ) : null}
 
         <View style={styles.composer}>
-          <Pressable
-            onPress={recording ? () => handleStopRecord(true) : handleStartRecord}
-            disabled={loading || processing}
-            style={({ pressed }) => [
-              styles.micBtn,
-              recording && styles.micBtnRecording,
-              (loading || processing) && { opacity: 0.5 },
-              pressed && { opacity: 0.85 },
-            ]}
-            hitSlop={6}
-          >
-            <MaterialCommunityIcons
-              name={recording ? 'stop' : 'microphone'}
-              size={22}
-              color={recording ? Colors.white : Colors.primary}
-            />
-          </Pressable>
+          {voiceInputAvailable ? (
+            <Pressable
+              onPress={recording ? () => handleStopRecord(true) : handleStartRecord}
+              disabled={loading || processing}
+              style={({ pressed }) => [
+                styles.micBtn,
+                recording && styles.micBtnRecording,
+                (loading || processing) && { opacity: 0.5 },
+                pressed && { opacity: 0.85 },
+              ]}
+              hitSlop={6}
+            >
+              <MaterialCommunityIcons
+                name={recording ? 'stop' : 'microphone'}
+                size={22}
+                color={recording ? Colors.white : Colors.primary}
+              />
+            </Pressable>
+          ) : null}
           <Pressable
             onPress={() => send()}
             disabled={!input.trim() || loading || processing}
@@ -689,7 +848,11 @@ export default function AIAssistantScreen() {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="اكتب أو اضغط الميكروفون..."
+            placeholder={
+              voiceInputAvailable
+                ? 'اكتب أو اضغط الميكروفون...'
+                : 'اكتب سؤالك هنا...'
+            }
             placeholderTextColor={Colors.textMuted}
             style={styles.composerInput}
             multiline
@@ -879,7 +1042,6 @@ const styles = StyleSheet.create({
     color: Colors.danger,
     fontWeight: FontWeight.bold,
     fontSize: FontSize.sm,
-    flex: 1,
     textAlign: 'right',
   },
   recTimer: {

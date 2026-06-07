@@ -1,43 +1,39 @@
 // Powered by OnSpace.AI
 import { Platform } from 'react-native';
-import { Audio } from 'expo-av';
-import * as FileSystem from 'expo-file-system';
 
-let currentRecording: Audio.Recording | null = null;
+// Web has its own SpeechRecognition path - this file is for native only
+let Audio: any = null;
+let FileSystem: any = null;
+
+if (Platform.OS !== 'web') {
+  try {
+    Audio = require('expo-av').Audio;
+  } catch {}
+  try {
+    FileSystem = require('expo-file-system');
+  } catch {}
+}
+
+let currentRecording: any = null;
 let recordingStartedAt = 0;
 
-const RECORDING_OPTIONS: Audio.RecordingOptions = {
-  isMeteringEnabled: true,
-  android: {
-    extension: '.m4a',
-    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-    audioEncoder: Audio.AndroidAudioEncoder.AAC,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 64000,
-  },
-  ios: {
-    extension: '.m4a',
-    outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
-    audioQuality: Audio.IOSAudioQuality.MEDIUM,
-    sampleRate: 16000,
-    numberOfChannels: 1,
-    bitRate: 64000,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
-  },
-  web: {
-    mimeType: 'audio/webm',
-    bitsPerSecond: 64000,
-  },
-};
+export const WEB_FALLBACK = 'WEB_FALLBACK';
 
 export async function startRecording(): Promise<{ ok: boolean; error?: string }> {
+  if (Platform.OS === 'web') {
+    return { ok: false, error: WEB_FALLBACK };
+  }
+  if (!Audio) {
+    return { ok: false, error: 'وحدة الصوت غير متاحة' };
+  }
+
   try {
     const perm = await Audio.requestPermissionsAsync();
     if (!perm.granted) {
-      return { ok: false, error: 'لم يتم منح إذن الميكروفون. الرجاء تفعيله من إعدادات الجهاز.' };
+      return {
+        ok: false,
+        error: 'لم يتم منح إذن الميكروفون. الرجاء تفعيله من إعدادات الجهاز.',
+      };
     }
 
     await Audio.setAudioModeAsync({
@@ -53,6 +49,33 @@ export async function startRecording(): Promise<{ ok: boolean; error?: string }>
       } catch {}
       currentRecording = null;
     }
+
+    const RECORDING_OPTIONS = {
+      isMeteringEnabled: true,
+      android: {
+        extension: '.m4a',
+        outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+        audioEncoder: Audio.AndroidAudioEncoder.AAC,
+        sampleRate: 16000,
+        numberOfChannels: 1,
+        bitRate: 64000,
+      },
+      ios: {
+        extension: '.m4a',
+        outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+        audioQuality: Audio.IOSAudioQuality.MEDIUM,
+        sampleRate: 16000,
+        numberOfChannels: 1,
+        bitRate: 64000,
+        linearPCMBitDepth: 16,
+        linearPCMIsBigEndian: false,
+        linearPCMIsFloat: false,
+      },
+      web: {
+        mimeType: 'audio/webm',
+        bitsPerSecond: 64000,
+      },
+    };
 
     const recording = new Audio.Recording();
     await recording.prepareToRecordAsync(RECORDING_OPTIONS);
@@ -73,6 +96,9 @@ export async function stopRecording(): Promise<{
   durationMs?: number;
   error?: string;
 }> {
+  if (Platform.OS === 'web') {
+    return { ok: false, error: WEB_FALLBACK };
+  }
   if (!currentRecording) {
     return { ok: false, error: 'لا يوجد تسجيل نشط' };
   }
@@ -83,30 +109,15 @@ export async function stopRecording(): Promise<{
     currentRecording = null;
 
     if (!uri) return { ok: false, error: 'لم يتم حفظ الملف الصوتي' };
+    if (!FileSystem) return { ok: false, error: 'نظام الملفات غير متاح' };
 
-    let base64 = '';
-    if (Platform.OS === 'web') {
-      const res = await fetch(uri);
-      const blob = await res.blob();
-      base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const str = reader.result as string;
-          resolve((str || '').split(',')[1] || '');
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } else {
-      base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-    }
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
 
     if (!base64) return { ok: false, error: 'الملف الصوتي فارغ' };
 
-    const format = Platform.OS === 'web' ? 'webm' : 'm4a';
-    return { ok: true, base64, format, durationMs };
+    return { ok: true, base64, format: 'm4a', durationMs };
   } catch (e: any) {
     currentRecording = null;
     return { ok: false, error: e?.message || 'تعذر إيقاف التسجيل' };
@@ -128,4 +139,8 @@ export function getCurrentDuration(): number {
 
 export function isRecordingActive(): boolean {
   return !!currentRecording;
+}
+
+export function isNativeRecordingSupported(): boolean {
+  return Platform.OS !== 'web' && !!Audio;
 }

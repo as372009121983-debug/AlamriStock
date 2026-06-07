@@ -26,38 +26,34 @@ serve(async (req) => {
 
     if (!apiKey || !baseUrl) {
       return new Response(
-        JSON.stringify({ error: 'OnSpace AI: missing configuration' }),
+        JSON.stringify({ error: 'إعدادات الذكاء الاصطناعي غير متوفرة' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // OpenRouter input_audio supports primarily wav and mp3
+    // m4a (AAC in MP4 container) → try as 'mp3' (similar AAC family)
+    let apiFormat = 'mp3';
+    if (audioFormat === 'wav') apiFormat = 'wav';
+    else if (audioFormat === 'mp3') apiFormat = 'mp3';
+    else if (audioFormat === 'webm') apiFormat = 'mp3'; // webm is uncommon, attempt mp3
+    else apiFormat = 'mp3'; // default fallback for m4a/aac
+
     const cur = context.currency || 'جنيه';
 
-    // Map format to MIME type
-    const mimeMap: Record<string, string> = {
-      m4a: 'audio/mp4',
-      mp3: 'audio/mpeg',
-      wav: 'audio/wav',
-      webm: 'audio/webm',
-      aac: 'audio/aac',
-      ogg: 'audio/ogg',
-    };
-    const mimeType = mimeMap[audioFormat] || 'audio/mp4';
+    const systemPrompt = `أنت "ذكي"، مساعد عربي خبير في إدارة المتاجر والمخازن.
+المستخدم سجّل صوتاً بالعربية. استمع وأعطني JSON بالضبط بالشكل التالي:
+{"transcription":"<النص الذي قاله المستخدم بالحرف>","reply":"<رد قصير وذكي>"}
 
-    const systemPrompt = `أنت "ذكي"، مساعد ذكاء اصطناعي عربي خبير في إدارة المتاجر والمخازن.
-
-المستخدم سجّل صوتاً بالعربية (مصرية أو فصحى أو خليجية). استمع جيداً وأعطني الإجابة كـ JSON بالشكل التالي بالضبط:
-{"transcription":"<النص المسموع كما قاله المستخدم بالحرف>","reply":"<ردك الذكي القصير>"}
-
-قواعد ردك:
-- ردك قصير جداً (جملة أو جملتين فقط لأنه سيُنطق بصوت)
-- بالعربية الفصحى الواضحة فقط
-- استخدم الأرقام الحقيقية من البيانات
+قواعد الرد:
+- ردك جملة أو جملتين قصيرتين فقط (سيُنطق بصوت)
+- بالعربية الفصحى الواضحة
+- استخدم الأرقام الحقيقية من البيانات أدناه
 - ممنوع أي رموز أو إيموجي أو أحرف خاصة في ردك
-- كن مباشراً، عملياً، ذكياً، ودوداً
-- لو مفيش بيانات للإجابة، اطلب توضيحاً قصيراً
+- كن مباشراً، عملياً، ودوداً
+- لو لم تفهم الصوت، اطلب توضيحاً قصيراً
 
-بيانات المتجر اللحظية:
+البيانات اللحظية للمتجر:
 - المنتجات: ${context.productsCount ?? 0} (${context.lowStockCount ?? 0} منخفضة الكمية)
 - قيمة المخزون: ${context.inventoryValue ?? 0} ${cur}
 - العملاء: ${context.customersCount ?? 0}
@@ -66,12 +62,11 @@ serve(async (req) => {
 - ربح اليوم: ${context.todayProfit ?? 0} ${cur}
 - مبيعات الشهر: ${context.monthSales ?? 0} ${cur}
 - ربح الشهر: ${context.monthProfit ?? 0} ${cur}
-- مصروفات الشهر: ${context.monthExpenses ?? 0} ${cur}
 - صافي الشهر: ${context.monthNet ?? 0} ${cur}
 - أكثر منتج مبيعاً: ${context.topProduct ?? 'لا يوجد'}
 - أهم عميل: ${context.topCustomer ?? 'لا يوجد'}
 
-تذكّر: JSON فقط، بدون أي نص قبله أو بعده.`;
+تذكّر: JSON فقط بدون أي نص قبله أو بعده.`;
 
     const messages: any[] = [
       { role: 'system', content: systemPrompt },
@@ -87,7 +82,7 @@ serve(async (req) => {
             type: 'input_audio',
             input_audio: {
               data: audioBase64,
-              format: audioFormat === 'webm' ? 'webm' : audioFormat === 'mp3' ? 'mp3' : audioFormat === 'wav' ? 'wav' : 'm4a',
+              format: apiFormat,
             },
           },
         ],
@@ -105,17 +100,20 @@ serve(async (req) => {
         messages,
         temperature: 0.4,
         max_tokens: 500,
-        response_format: { type: 'json_object' },
       }),
     });
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');
       console.error('Voice AI error:', response.status, errText);
+
+      const userMsg =
+        response.status === 400
+          ? 'الصيغة الصوتية غير مدعومة من قبل خدمة الذكاء الاصطناعي. جرب الكتابة بدلاً من الصوت.'
+          : `خدمة الصوت غير متاحة (${response.status}). جرب الكتابة بدلاً من الصوت.`;
+
       return new Response(
-        JSON.stringify({
-          error: `OnSpace AI: ${response.status} - ${errText.slice(0, 250)}`,
-        }),
+        JSON.stringify({ error: userMsg, details: errText.slice(0, 300) }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -127,7 +125,6 @@ serve(async (req) => {
     try {
       parsed = JSON.parse(content);
     } catch {
-      // Try extracting JSON from markdown or freeform text
       const match = content.match(/\{[\s\S]*\}/);
       if (match) {
         try {
@@ -150,7 +147,7 @@ serve(async (req) => {
   } catch (e: any) {
     console.error('Voice chat exception:', e);
     return new Response(
-      JSON.stringify({ error: e?.message || 'Internal server error' }),
+      JSON.stringify({ error: e?.message || 'حدث خطأ في الخادم' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
