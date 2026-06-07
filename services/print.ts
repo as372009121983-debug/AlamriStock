@@ -810,14 +810,55 @@ export function buildWorkerAdvancesHtml(
 // ========== Print actions ==========
 export type PrintAction = 'print' | 'pdf' | 'preview';
 
-export async function performPrint(html: string, fileName: string, action: PrintAction): Promise<void> {
+function openWebPrintWindow(html: string, fileName: string): any {
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    throw new Error('غير متاح في هذه البيئة');
+  }
+  const printWindow = window.open(
+    'about:blank',
+    '_blank',
+    'width=900,height=700,scrollbars=yes,resizable=yes'
+  );
+  if (!printWindow) {
+    throw new Error('برجاء السماح بالنوافذ المنبثقة من المتصفح ثم حاول مرة أخرى');
+  }
+  try {
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  } catch {
+    try { printWindow.close(); } catch {}
+    throw new Error('تعذر فتح النافذة الجديدة');
+  }
+  try {
+    printWindow.document.title = fileName || 'تقرير';
+  } catch {}
+  return printWindow;
+}
+
+export async function performPrint(
+  html: string,
+  fileName: string,
+  action: PrintAction
+): Promise<void> {
+  // Web: open in a new window/tab to avoid printing the parent page
+  if (Platform.OS === 'web') {
+    const w = openWebPrintWindow(html, fileName);
+    if (action === 'preview') return;
+    // wait for content/fonts to render before printing or save-as-PDF
+    await new Promise((r) => setTimeout(r, 700));
+    try {
+      w.focus();
+      // Both 'print' and 'pdf' on web use the browser print dialog
+      // (user picks "Save as PDF" from the destination)
+      w.print();
+    } catch {}
+    return;
+  }
+
+  // Native
   if (action === 'pdf') {
     const { uri } = await Print.printToFileAsync({ html, base64: false });
-    if (Platform.OS === 'web') {
-      // @ts-ignore
-      if (typeof window !== 'undefined') window.open(uri, '_blank');
-      return;
-    }
     const safeName = fileName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
     const target = `${FileSystem.documentDirectory}${safeName}.pdf`;
     try {
@@ -829,6 +870,134 @@ export async function performPrint(html: string, fileName: string, action: Print
     return;
   }
   await Print.printAsync({ html });
+}
+
+// ========== Excel Export ==========
+// Builds an HTML-table-as-Excel file (.xls). Excel opens these natively
+// and renders RTL/Arabic correctly via the office namespace hints.
+export async function exportXlsx(
+  data: {
+    title: string;
+    meta?: { label: string; value: string }[];
+    columns: string[];
+    rows: (string | number)[][];
+    totalLabel?: string;
+    totalValue?: string;
+  },
+  fileName: string
+): Promise<void> {
+  const headerHtml = data.columns
+    .map(
+      (c) =>
+        `<th style="background:#0D9488;color:#fff;padding:10px;text-align:right;border:1px solid #0D9488;font-weight:bold;">${escapeHtml(
+          c
+        )}</th>`
+    )
+    .join('');
+  const rowsHtml = data.rows
+    .map(
+      (r) =>
+        `<tr>${r
+          .map(
+            (c) =>
+              `<td style="border:1px solid #999;padding:8px;text-align:right;">${escapeHtml(
+                String(c ?? '')
+              )}</td>`
+          )
+          .join('')}</tr>`
+    )
+    .join('');
+  const metaHtml = (data.meta || [])
+    .map(
+      (m) =>
+        `<tr><td colspan="${data.columns.length}" style="background:#F0FDFA;color:#0F766E;padding:6px;text-align:right;border:1px solid #99F6E4;">${escapeHtml(
+          m.label
+        )}: <b>${escapeHtml(m.value)}</b></td></tr>`
+    )
+    .join('');
+  const totalHtml =
+    data.totalLabel && data.totalValue
+      ? `<tr><td colspan="${Math.max(
+          1,
+          data.columns.length - 1
+        )}" style="background:#F0FDFA;color:#0F766E;font-weight:bold;padding:10px;text-align:right;border:2px solid #0D9488;">${escapeHtml(
+          data.totalLabel
+        )}</td><td style="background:#F0FDFA;color:#0F766E;font-weight:bold;padding:10px;text-align:right;border:2px solid #0D9488;">${escapeHtml(
+          data.totalValue
+        )}</td></tr>`
+      : '';
+
+  const html = `<!DOCTYPE html>
+<html dir="rtl" lang="ar" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head>
+<meta charset="UTF-8">
+<title>${escapeHtml(data.title)}</title>
+<!--[if gte mso 9]>
+<xml>
+  <x:ExcelWorkbook>
+    <x:ExcelWorksheets>
+      <x:ExcelWorksheet>
+        <x:Name>${escapeHtml(data.title.slice(0, 30))}</x:Name>
+        <x:WorksheetOptions>
+          <x:DisplayRightToLeft/>
+        </x:WorksheetOptions>
+      </x:ExcelWorksheet>
+    </x:ExcelWorksheets>
+  </x:ExcelWorkbook>
+</xml>
+<![endif]-->
+<style>
+  body { direction: rtl; font-family: 'Tahoma', Arial, sans-serif; padding: 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  h1 { color: #0F766E; text-align: right; border-bottom: 2px solid #0D9488; padding-bottom: 8px; }
+</style>
+</head>
+<body>
+  <h1>${escapeHtml(data.title)}</h1>
+  <table>
+    ${metaHtml ? `<thead>${metaHtml}</thead>` : ''}
+    <thead><tr>${headerHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody>
+    ${totalHtml ? `<tfoot>${totalHtml}</tfoot>` : ''}
+  </table>
+</body>
+</html>`;
+
+  const safeName = fileName.replace(/[^a-zA-Z0-9_\-\.\u0600-\u06FF]/g, '_');
+
+  if (Platform.OS === 'web') {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      throw new Error('غير متاح في هذه البيئة');
+    }
+    const blob = new Blob(['\uFEFF' + html], {
+      type: 'application/vnd.ms-excel;charset=utf-8',
+    });
+    // @ts-ignore
+    const url = URL.createObjectURL(blob);
+    // @ts-ignore
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}.xls`;
+    // @ts-ignore
+    document.body.appendChild(a);
+    a.click();
+    // @ts-ignore
+    document.body.removeChild(a);
+    // @ts-ignore
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return;
+  }
+
+  const path = `${FileSystem.documentDirectory}${safeName}.xls`;
+  await FileSystem.writeAsStringAsync(path, '\uFEFF' + html, {
+    encoding: FileSystem.EncodingType.UTF8,
+  });
+  if (await Sharing.isAvailableAsync()) {
+    await Sharing.shareAsync(path, {
+      mimeType: 'application/vnd.ms-excel',
+      dialogTitle: fileName,
+    });
+  }
 }
 
 // ========== CSV Export ==========

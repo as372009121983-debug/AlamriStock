@@ -12,11 +12,12 @@ type Props = {
   onAction: (action: PrintAction) => void;
   showCsvOption?: boolean;
   onCsv?: () => void;
+  onExcel?: () => void;
 };
 
-export function PrintMenu({ visible, onClose, onAction, showCsvOption, onCsv }: Props) {
+export function PrintMenu({ visible, onClose, onAction, showCsvOption, onCsv, onExcel }: Props) {
   const items: {
-    key: PrintAction | 'csv';
+    key: PrintAction | 'csv' | 'excel';
     label: string;
     desc: string;
     icon: keyof typeof MaterialCommunityIcons.glyphMap;
@@ -26,7 +27,7 @@ export function PrintMenu({ visible, onClose, onAction, showCsvOption, onCsv }: 
     {
       key: 'print',
       label: 'طباعة مباشرة',
-      desc: 'إرسال إلى طابعة متصلة',
+      desc: 'إرسال إلى الطابعة (نافذة جديدة على المتصفح)',
       icon: 'printer',
       color: Colors.primary,
       bg: Colors.primarySoft,
@@ -41,22 +42,33 @@ export function PrintMenu({ visible, onClose, onAction, showCsvOption, onCsv }: 
     },
     {
       key: 'preview',
-      label: 'معاينة قبل الطباعة',
-      desc: 'عرض الفاتورة قبل الطباعة',
+      label: 'معاينة',
+      desc: 'فتح في نافذة جديدة قبل الطباعة',
       icon: 'eye-outline',
       color: Colors.info,
       bg: Colors.infoSoft,
     },
   ];
 
-  if (showCsvOption) {
+  if (onExcel) {
     items.push({
-      key: 'csv',
-      label: 'تصدير Excel/CSV',
-      desc: 'تصدير الجدول كملف Excel',
-      icon: 'file-excel-box',
+      key: 'excel',
+      label: 'تصدير Excel',
+      desc: 'تصدير الجدول كملف Excel (.xls)',
+      icon: 'microsoft-excel',
       color: Colors.success,
       bg: Colors.successSoft,
+    });
+  }
+
+  if (showCsvOption && onCsv) {
+    items.push({
+      key: 'csv',
+      label: 'تصدير CSV',
+      desc: 'تصدير الجدول كملف CSV',
+      icon: 'file-delimited-outline',
+      color: Colors.warning,
+      bg: Colors.warningSoft,
     });
   }
 
@@ -67,9 +79,11 @@ export function PrintMenu({ visible, onClose, onAction, showCsvOption, onCsv }: 
           key={it.key}
           onPress={() => {
             onClose();
-            if (it.key === 'csv' && onCsv) {
-              onCsv();
-            } else if (it.key !== 'csv') {
+            if (it.key === 'csv') {
+              onCsv && onCsv();
+            } else if (it.key === 'excel') {
+              onExcel && onExcel();
+            } else {
               onAction(it.key as PrintAction);
             }
           }}
