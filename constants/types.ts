@@ -388,4 +388,8 @@ export type Settings = {
   taxNumber: string;
   invoiceFooter: string;
   adminPassword: string;
+  adminPasswordEnabled?: boolean;
+  soundEnabled?: boolean;
+  voiceEnabled?: boolean;
+  aiEnabled?: boolean;
 };

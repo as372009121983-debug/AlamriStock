@@ -20,8 +20,14 @@ export function AdminGuardProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<GuardRequest | null>(null);
 
   const guard = useCallback((request: GuardRequest) => {
+    if (settings.adminPasswordEnabled === false) {
+      Promise.resolve(request.action()).catch((e) => {
+        console.warn('Direct action failed', e);
+      });
+      return;
+    }
     setPending(request);
-  }, []);
+  }, [settings.adminPasswordEnabled]);
 
   const handleSuccess = useCallback(async () => {
     if (pending) {

@@ -43,6 +43,7 @@ export default function DashboardScreen() {
   }, [search, baseTiles]);
 
   const drawerItems: { label: string; icon: IconName; route?: string; danger?: boolean; onPress?: () => void; badge?: number; divider?: boolean }[] = [
+    { label: 'المساعد الذكي', icon: 'robot-happy-outline', route: '/ai-assistant' },
     { label: 'الخزينه', icon: 'wallet-outline', route: '/journal' },
     { label: 'الاعدادات', icon: 'cog-outline', route: '/settings' },
     { label: 'اعدادات الطباعة', icon: 'printer-outline', route: '/settings' },
@@ -59,6 +60,7 @@ export default function DashboardScreen() {
 
   const moreActions: { label: string; icon: IconName; route: string; badge?: number }[] = [
     { label: 'فاتورة بيع جديدة', icon: 'cart-plus', route: '/new-sale' },
+    ...(settings.aiEnabled !== false ? [{ label: 'المساعد الذكي', icon: 'robot-happy-outline' as IconName, route: '/ai-assistant' }] : []),
     { label: 'الجرد', icon: 'clipboard-list-outline', route: '/inventory' },
     { label: 'الأرباح', icon: 'trending-up', route: '/profits' },
     { label: 'دفعات العملاء', icon: 'cash-plus', route: '/customer-payments' },

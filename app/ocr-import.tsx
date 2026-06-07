@@ -1,3 +1,4 @@
+
 // Powered by OnSpace.AI
 import React, { useMemo, useState } from 'react';
 import {
@@ -84,7 +85,10 @@ export default function OCRImportScreen() {
     const result = await extractProductsFromImage(imageUri);
     setAnalyzing(false);
     if (!result.ok) {
-      showAlert('تعذر التحليل', result.error);
+      showAlert(
+        'تعذر التحليل',
+        `${result.error}\n\nنصيحة:\n• تأكد من جودة الصورة ووضوح النص\n• تأكد من الاتصال بالإنترنت\n• جرب صورة أوضح أو إضاءة أفضل`
+      );
       return;
     }
     if (result.products.length === 0) {

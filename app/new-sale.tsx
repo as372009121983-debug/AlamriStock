@@ -1,5 +1,5 @@
 // Powered by OnSpace.AI
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -47,6 +47,10 @@ export default function NewSaleScreen() {
   const [warehousePickerVisible, setWarehousePickerVisible] = useState(false);
   const [search, setSearch] = useState('');
 
+  // Raw input state per product (allows empty/partial typing without losing the item)
+  const [qtyInputs, setQtyInputs] = useState<Record<string, string>>({});
+  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+
   const subtotal = useMemo(
     () => items.reduce((s, it) => s + it.price * it.quantity, 0),
     [items]
@@ -84,7 +88,9 @@ export default function NewSaleScreen() {
       return;
     }
     if (existing) {
-      updateItem(productId, { quantity: existing.quantity + 1 });
+      const newQty = existing.quantity + 1;
+      updateItem(productId, { quantity: newQty });
+      setQtyInputs((prev) => ({ ...prev, [productId]: String(newQty) }));
     } else {
       setItems((prev) => [
         ...prev,
@@ -97,6 +103,8 @@ export default function NewSaleScreen() {
           priceLabel: 'قطاعي',
         },
       ]);
+      setQtyInputs((prev) => ({ ...prev, [productId]: '1' }));
+      setPriceInputs((prev) => ({ ...prev, [productId]: String(p.salePrice) }));
     }
     setProductPickerVisible(false);
     setSearch('');
@@ -110,6 +118,16 @@ export default function NewSaleScreen() {
 
   function removeItem(productId: string) {
     setItems((prev) => prev.filter((it) => it.productId !== productId));
+    setQtyInputs((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
+    setPriceInputs((prev) => {
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
   }
 
   function changeQty(productId: string, delta: number) {
@@ -126,27 +144,59 @@ export default function NewSaleScreen() {
       return;
     }
     updateItem(productId, { quantity: newQty });
+    setQtyInputs((prev) => ({ ...prev, [productId]: String(newQty) }));
   }
 
-  function setQtyManual(productId: string, value: string) {
-    const num = Number(value.replace(/[^0-9.]/g, '')) || 0;
-    const item = items.find((it) => it.productId === productId);
-    if (!item) return;
+  // Handles typing into qty input - allows empty/partial without removing item
+  function handleQtyText(productId: string, value: string) {
+    setQtyInputs((prev) => ({ ...prev, [productId]: value }));
+    if (value === '' || value === '.' || value === ',') return;
+    const cleaned = value.replace(/[^0-9.]/g, '');
+    if (cleaned === '') return;
+    const num = Number(cleaned);
+    if (isNaN(num) || num <= 0) return;
     const stock = warehouseId ? getStock(productId, warehouseId) : 0;
-    if (num <= 0) {
-      removeItem(productId);
-      return;
-    }
     if (num > stock) {
-      showAlert('تنبيه', `الكمية المتاحة ${formatNumber(stock)} فقط`);
+      // Clamp silently during typing
       updateItem(productId, { quantity: stock });
+      setQtyInputs((prev) => ({ ...prev, [productId]: String(stock) }));
       return;
     }
     updateItem(productId, { quantity: num });
   }
 
+  // Restore valid display value when input loses focus
+  function commitQty(productId: string) {
+    const item = items.find((it) => it.productId === productId);
+    if (!item) return;
+    const val = qtyInputs[productId];
+    if (!val || val === '' || Number(val) <= 0 || isNaN(Number(val))) {
+      setQtyInputs((prev) => ({ ...prev, [productId]: String(item.quantity) }));
+    }
+  }
+
+  function handlePriceText(productId: string, value: string) {
+    setPriceInputs((prev) => ({ ...prev, [productId]: value }));
+    if (value === '' || value === '.') return;
+    const cleaned = value.replace(/[^0-9.]/g, '');
+    if (cleaned === '') return;
+    const num = Number(cleaned);
+    if (isNaN(num) || num < 0) return;
+    updateItem(productId, { price: num, priceLabel: 'سعر مخصص' });
+  }
+
+  function commitPrice(productId: string) {
+    const item = items.find((it) => it.productId === productId);
+    if (!item) return;
+    const val = priceInputs[productId];
+    if (!val || val === '' || isNaN(Number(val))) {
+      setPriceInputs((prev) => ({ ...prev, [productId]: String(item.price) }));
+    }
+  }
+
   function pickPriceTier(productId: string, label: string, price: number) {
     updateItem(productId, { price, priceLabel: label });
+    setPriceInputs((prev) => ({ ...prev, [productId]: String(price) }));
   }
 
   function getProductPrices(productId: string): { id: string; label: string; price: number }[] {
@@ -165,6 +215,17 @@ export default function NewSaleScreen() {
     if (items.length === 0) {
       showAlert('تنبيه', 'أضف منتجاً واحداً على الأقل');
       return;
+    }
+    // Validate quantities
+    for (const it of items) {
+      if (!it.quantity || it.quantity <= 0) {
+        showAlert('تنبيه', `الكمية غير صحيحة للمنتج "${it.name}"`);
+        return;
+      }
+      if (it.price < 0) {
+        showAlert('تنبيه', `السعر غير صحيح للمنتج "${it.name}"`);
+        return;
+      }
     }
     const customer = customers.find((c) => c.id === customerId);
     const result = createSale({
@@ -238,6 +299,7 @@ export default function NewSaleScreen() {
             items.map((it) => {
               const prices = getProductPrices(it.productId);
               const stock = warehouseId ? getStock(it.productId, warehouseId) : 0;
+              const isCustomPrice = it.priceLabel === 'سعر مخصص';
               return (
                 <View key={it.productId} style={styles.itemCard}>
                   <View style={styles.itemHeader}>
@@ -272,7 +334,43 @@ export default function NewSaleScreen() {
                         </Pressable>
                       );
                     })}
+                    <Pressable
+                      onPress={() => {
+                        updateItem(it.productId, { priceLabel: 'سعر مخصص' });
+                        setPriceInputs((prev) => ({ ...prev, [it.productId]: String(it.price) }));
+                      }}
+                      style={({ pressed }) => [
+                        styles.priceTierChip,
+                        isCustomPrice && styles.priceTierChipActive,
+                        { backgroundColor: isCustomPrice ? Colors.warning : Colors.warningSoft, borderColor: Colors.warning },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name="pencil-outline"
+                        size={12}
+                        color={isCustomPrice ? Colors.white : Colors.warning}
+                      />
+                      <Text style={[styles.priceTierLabel, { color: isCustomPrice ? Colors.white : Colors.warning, marginTop: 2 }]}>
+                        سعر مخصص
+                      </Text>
+                    </Pressable>
                   </View>
+
+                  {isCustomPrice ? (
+                    <View style={styles.customPriceRow}>
+                      <Text style={styles.customPriceLabel}>السعر المخصص:</Text>
+                      <Input
+                        value={priceInputs[it.productId] !== undefined ? priceInputs[it.productId] : String(it.price)}
+                        onChangeText={(t) => handlePriceText(it.productId, t)}
+                        onBlur={() => commitPrice(it.productId)}
+                        keyboardType="decimal-pad"
+                        placeholder="0.00"
+                        containerStyle={{ flex: 1 }}
+                        style={{ minHeight: 44, paddingVertical: 8, fontWeight: FontWeight.bold, color: Colors.warning }}
+                      />
+                    </View>
+                  ) : null}
 
                   <View style={styles.qtyTotalRow}>
                     <View style={styles.qtyControl}>
@@ -283,8 +381,9 @@ export default function NewSaleScreen() {
                         <MaterialCommunityIcons name="plus" size={18} color={Colors.primary} />
                       </Pressable>
                       <Input
-                        value={String(it.quantity)}
-                        onChangeText={(t) => setQtyManual(it.productId, t)}
+                        value={qtyInputs[it.productId] !== undefined ? qtyInputs[it.productId] : String(it.quantity)}
+                        onChangeText={(t) => handleQtyText(it.productId, t)}
+                        onBlur={() => commitQty(it.productId)}
                         keyboardType="decimal-pad"
                         containerStyle={{ width: 80 }}
                         style={{ textAlign: 'center', minHeight: 40, paddingVertical: 8 }}
@@ -542,6 +641,17 @@ const styles = StyleSheet.create({
   priceTierChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   priceTierLabel: { color: Colors.text, fontSize: 11, fontWeight: FontWeight.semibold },
   priceTierValue: { color: Colors.primary, fontSize: 12, fontWeight: FontWeight.bold, marginTop: 2 },
+  customPriceRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.warningSoft,
+    padding: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+  },
+  customPriceLabel: { color: Colors.warning, fontWeight: FontWeight.bold, fontSize: FontSize.sm },
   qtyTotalRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',

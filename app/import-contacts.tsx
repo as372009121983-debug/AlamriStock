@@ -3,6 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Linking,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -13,7 +15,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Header } from '@/components/ui/Header';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { SearchBar } from '@/components/ui/SearchBar';
+import { Modal } from '@/components/ui/Modal';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useStore } from '@/hooks/useStore';
 import { useAuth } from '@/hooks/useAuth';
@@ -31,22 +35,36 @@ export default function ImportContactsScreen() {
   const { canEdit } = useAuth();
   const { showAlert } = useAlert();
 
-  const [permission, setPermission] = useState<'pending' | 'granted' | 'denied'>('pending');
+  const [permission, setPermission] = useState<'pending' | 'granted' | 'denied' | 'unavailable'>('pending');
   const [loading, setLoading] = useState(false);
   const [contacts, setContacts] = useState<SimpleContact[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState(false);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [manualVisible, setManualVisible] = useState(false);
+  const [manualName, setManualName] = useState('');
+  const [manualPhone, setManualPhone] = useState('');
 
   useEffect(() => {
     requestAndLoad();
   }, []);
 
   async function requestAndLoad() {
+    if (Platform.OS === 'web') {
+      setPermission('unavailable');
+      setErrorMessage('استيراد جهات الاتصال غير متاح على المتصفح. استخدم التطبيق على الهاتف.');
+      return;
+    }
     setLoading(true);
+    setErrorMessage('');
     try {
-      const { status } = await Contacts.requestPermissionsAsync();
+      let { status } = await Contacts.getPermissionsAsync();
+      if (status !== 'granted') {
+        const result = await Contacts.requestPermissionsAsync();
+        status = result.status;
+      }
       if (status !== 'granted') {
         setPermission('denied');
         setLoading(false);
@@ -54,7 +72,7 @@ export default function ImportContactsScreen() {
       }
       setPermission('granted');
       const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers],
+        fields: [Contacts.Fields.Name, Contacts.Fields.PhoneNumbers, Contacts.Fields.FirstName],
       });
       const list: SimpleContact[] = [];
       const seen = new Set<string>();
@@ -62,18 +80,50 @@ export default function ImportContactsScreen() {
         const phone = c.phoneNumbers?.[0]?.number;
         const name = c.name || c.firstName || '';
         if (!name.trim() || !phone) continue;
-        const cleaned = phone.replace(/[\s-()]/g, '');
+        const cleaned = phone.replace(/[\s\-()]/g, '');
         if (seen.has(cleaned)) continue;
         seen.add(cleaned);
         list.push({ id: c.id || `c_${list.length}`, name: name.trim(), phone: cleaned });
       }
       list.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
       setContacts(list);
+      if (list.length === 0) {
+        setErrorMessage('لا توجد جهات اتصال بأرقام هاتف على هذا الجهاز');
+      }
     } catch (e: any) {
+      setErrorMessage(e?.message || 'فشل قراءة جهات الاتصال');
       showAlert('تعذر التحميل', e?.message || 'فشل قراءة جهات الاتصال');
     } finally {
       setLoading(false);
     }
+  }
+
+  async function openSystemSettings() {
+    try {
+      if (Platform.OS === 'ios') {
+        await Linking.openURL('app-settings:');
+      } else {
+        await Linking.openSettings();
+      }
+    } catch {
+      showAlert('تنبيه', 'افتح إعدادات الجهاز يدوياً وامنح صلاحية جهات الاتصال للتطبيق');
+    }
+  }
+
+  function handleManualSave() {
+    if (!manualName.trim()) {
+      showAlert('تنبيه', 'الاسم مطلوب');
+      return;
+    }
+    addCustomer({
+      name: manualName.trim(),
+      phone: manualPhone.trim(),
+      address: '',
+    });
+    showAlert('تم', `تم إضافة "${manualName.trim()}" كعميل جديد`);
+    setManualName('');
+    setManualPhone('');
+    setManualVisible(false);
   }
 
   const filtered = useMemo(() => {
@@ -155,7 +205,7 @@ export default function ImportContactsScreen() {
     );
   }
 
-  if (permission === 'denied') {
+  if (permission === 'denied' || permission === 'unavailable') {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <Header title="استيراد جهات الاتصال" />
@@ -163,12 +213,58 @@ export default function ImportContactsScreen() {
           <View style={[styles.iconBig, { backgroundColor: Colors.warningSoft, borderColor: Colors.warning }]}>
             <MaterialCommunityIcons name="contacts-outline" size={64} color={Colors.warning} />
           </View>
-          <Text style={styles.title}>لم يتم منح الصلاحية</Text>
-          <Text style={styles.sub}>
-            يحتاج التطبيق إلى الوصول لجهات الاتصال لاستيراد العملاء
+          <Text style={styles.title}>
+            {permission === 'unavailable' ? 'غير متاح' : 'لم يتم منح الصلاحية'}
           </Text>
-          <Button title="إعادة المحاولة" onPress={requestAndLoad} icon="refresh" style={{ marginTop: Spacing.lg }} />
+          <Text style={styles.sub}>
+            {permission === 'unavailable'
+              ? 'استيراد جهات الاتصال غير مدعوم على المتصفح. افتح التطبيق على الهاتف لاستخدام هذه الميزة.'
+              : 'لم يستطع التطبيق الوصول لجهات الاتصال. قد تحتاج لفتح إعدادات الجهاز ومنح الصلاحية يدوياً.'}
+          </Text>
+
+          <View style={styles.actionsBox}>
+            <Button title="إعادة المحاولة" onPress={requestAndLoad} icon="refresh" fullWidth />
+            {permission === 'denied' ? (
+              <Button
+                title="فتح إعدادات الجهاز"
+                onPress={openSystemSettings}
+                icon="cog-outline"
+                variant="secondary"
+                fullWidth
+              />
+            ) : null}
+            <View style={styles.divider} />
+            <Text style={styles.altLabel}>أو أضف عميلاً يدوياً:</Text>
+            <Button
+              title="إضافة عميل يدوياً"
+              onPress={() => setManualVisible(true)}
+              icon="account-plus"
+              variant="outline"
+              fullWidth
+            />
+          </View>
         </View>
+
+        <Modal
+          visible={manualVisible}
+          onClose={() => setManualVisible(false)}
+          title="إضافة عميل يدوياً"
+          footer={<Button title="حفظ" onPress={handleManualSave} fullWidth size="lg" />}
+        >
+          <Input
+            label="اسم العميل"
+            value={manualName}
+            onChangeText={setManualName}
+            placeholder="اسم العميل"
+          />
+          <Input
+            label="رقم الهاتف"
+            value={manualPhone}
+            onChangeText={setManualPhone}
+            placeholder="رقم الهاتف"
+            keyboardType="phone-pad"
+          />
+        </Modal>
       </SafeAreaView>
     );
   }
@@ -177,7 +273,35 @@ export default function ImportContactsScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
         <Header title="استيراد جهات الاتصال" />
-        <EmptyState icon="contacts-outline" title="لا توجد جهات اتصال" description="لم نجد جهات اتصال بأرقام هاتف" />
+        <View style={styles.center}>
+          <View style={[styles.iconBig, { backgroundColor: Colors.surfaceAlt, borderColor: Colors.border }]}>
+            <MaterialCommunityIcons name="contacts-outline" size={64} color={Colors.textMuted} />
+          </View>
+          <Text style={styles.title}>لا توجد جهات اتصال</Text>
+          <Text style={styles.sub}>
+            {errorMessage || 'لم نجد جهات اتصال بأرقام هاتف على هذا الجهاز'}
+          </Text>
+          <View style={styles.actionsBox}>
+            <Button title="إعادة المحاولة" onPress={requestAndLoad} icon="refresh" fullWidth />
+            <Button
+              title="إضافة عميل يدوياً"
+              onPress={() => setManualVisible(true)}
+              icon="account-plus"
+              variant="outline"
+              fullWidth
+            />
+          </View>
+        </View>
+
+        <Modal
+          visible={manualVisible}
+          onClose={() => setManualVisible(false)}
+          title="إضافة عميل يدوياً"
+          footer={<Button title="حفظ" onPress={handleManualSave} fullWidth size="lg" />}
+        >
+          <Input label="اسم العميل" value={manualName} onChangeText={setManualName} placeholder="اسم العميل" />
+          <Input label="رقم الهاتف" value={manualPhone} onChangeText={setManualPhone} placeholder="رقم الهاتف" keyboardType="phone-pad" />
+        </Modal>
       </SafeAreaView>
     );
   }
@@ -282,6 +406,9 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: FontSize.xxl, fontWeight: FontWeight.bold, color: Colors.text, marginTop: Spacing.md },
   sub: { color: Colors.textSecondary, fontSize: FontSize.sm, textAlign: 'center', paddingHorizontal: Spacing.xl, lineHeight: 20 },
+  actionsBox: { width: '100%', gap: Spacing.sm, marginTop: Spacing.lg, paddingHorizontal: Spacing.lg },
+  divider: { height: 1, backgroundColor: Colors.border, marginVertical: Spacing.sm },
+  altLabel: { color: Colors.textSecondary, fontSize: FontSize.sm, textAlign: 'center' },
   toolbar: { paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, backgroundColor: Colors.surface, borderBottomWidth: 1, borderBottomColor: Colors.border },
   actionsBar: {
     flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between',

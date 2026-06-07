@@ -68,6 +68,7 @@ export default function RootLayout() {
                   <Stack.Screen name="join-requests" />
                   <Stack.Screen name="reports" />
                   <Stack.Screen name="report-view" />
+                  <Stack.Screen name="ai-assistant" />
                   <Stack.Screen name="settings" />
                   <Stack.Screen name="about" />
                   <Stack.Screen name="import-products" />

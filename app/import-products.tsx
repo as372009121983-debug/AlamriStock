@@ -1,3 +1,4 @@
+
 // Powered by OnSpace.AI
 import React, { useMemo, useState } from 'react';
 import {
@@ -47,7 +48,12 @@ export default function ImportProductsScreen() {
     const result = await pickAndParseFile();
     setLoading(false);
     if (!result.ok) {
-      if (!result.canceled) showAlert('تعذر القراءة', result.error);
+      if (!result.canceled) {
+        showAlert(
+          'تعذر قراءة الملف',
+          `$${result.error}\n\nنصيحة:\n• تأكد أن الملف بصيغة CSV أو Excel (xlsx, xls)\n• تأكد أن الملف به صف رؤوس في الأول (الاسم، السعر، الكمية)\n• جرب تحميل القالب الجاهز أدناه وعبّئه ببياناتك`
+        );
+      }
       return;
     }
     const sheet = result.data;

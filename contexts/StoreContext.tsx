@@ -38,6 +38,7 @@ import {
   WorkerPayment,
 } from '@/constants/types';
 import { useAuth } from '@/hooks/useAuth';
+import { notifyAction } from '@/services/notify';
 import {
   AppDataBlob,
   pullAppData,
@@ -84,6 +85,8 @@ export type StoreContextType = {
   addProduct: (data: Omit<Product, 'id' | 'createdAt' | 'quantity'>, warehouseId: string, initialQty: number) => { ok: boolean; message?: string };
   updateProduct: (id: string, data: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
+  updateProductQuantity: (productId: string, warehouseId: string, newQuantity: number) => { ok: boolean; message?: string };
+  recalculateInventory: () => void;
   addCustomer: (data: Omit<Customer, 'id' | 'createdAt' | 'debt'> & { debt?: number }) => Customer;
   updateCustomer: (id: string, data: Partial<Customer>) => void;
   deleteCustomer: (id: string) => void;
@@ -136,6 +139,10 @@ const defaultSettings: Settings = {
   taxNumber: '',
   invoiceFooter: 'شكراً لتعاملكم معنا',
   adminPassword: '0',
+  adminPasswordEnabled: true,
+  soundEnabled: true,
+  voiceEnabled: true,
+  aiEnabled: true,
 };
 
 const ACTIVITY_LIMIT = 1000;
@@ -175,6 +182,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const lastCloudUpdateRef = useRef<string | null>(null);
   const previousUserKeyRef = useRef<string | null>(null);
+  const lastNotifiedActivityRef = useRef<string | null>(null);
 
   // Load local cache on mount
   useEffect(() => {
@@ -299,6 +307,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) saveData(StorageKeys.workerAdvances, workerAdvances); }, [workerAdvances, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.notifications, notifications); }, [notifications, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.activityLog, activityLog); }, [activityLog, ready]);
+
+  // Notify on new activity (sound + voice)
+  useEffect(() => {
+    if (!ready) return;
+    if (!activityLog.length) return;
+    const latest = activityLog[0];
+    if (lastNotifiedActivityRef.current === null) {
+      lastNotifiedActivityRef.current = latest.id;
+      return;
+    }
+    if (latest.id === lastNotifiedActivityRef.current) return;
+    lastNotifiedActivityRef.current = latest.id;
+    const skipTypes = new Set(['login', 'logout', 'settings_update']);
+    if (skipTypes.has(latest.type as string)) return;
+    const soundOn = settings.soundEnabled !== false;
+    const voiceOn = settings.voiceEnabled !== false;
+    if (!soundOn && !voiceOn) return;
+    notifyAction(latest.description, { sound: soundOn, voice: voiceOn });
+  }, [activityLog, settings.soundEnabled, settings.voiceEnabled, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.settings, settings); }, [settings, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.invoiceCounter, invoiceCounter); }, [invoiceCounter, ready]);
   useEffect(() => { if (ready) saveData(StorageKeys.purchaseCounter, purchaseCounter); }, [purchaseCounter, ready]);
@@ -574,6 +601,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setProducts((prev) => prev.filter((p) => p.id !== id));
     if (target) logActivity('product_delete', `حذف منتج: ${target.name}`, { refId: id });
   }, [products, setStocks, setProducts, logActivity]); // Added setStocks and setProducts to deps
+
+  const updateProductQuantity = useCallback((productId: string, warehouseId: string, newQuantity: number) => {
+    if (newQuantity < 0) return { ok: false, message: 'الكمية لا يمكن أن تكون سالبة' };
+    const wh = warehouses.find((w) => w.id === warehouseId);
+    if (!wh) return { ok: false, message: 'المخزن غير موجود' };
+    const current = stocks.find((s) => s.productId === productId && s.warehouseId === warehouseId);
+    const oldQty = current?.quantity || 0;
+    const delta = newQuantity - oldQty;
+    if (delta === 0) return { ok: true };
+    const newStocks = adjustStockList(stocks, productId, warehouseId, delta);
+    setStocks(newStocks);
+    setProducts((prev) => syncProductQuantities(prev, newStocks));
+    const target = products.find((p) => p.id === productId);
+    logActivity('product_edit', `تعديل كمية ${target?.name || ''} في ${wh.name} إلى ${newQuantity}`, { refId: productId });
+    return { ok: true };
+  }, [stocks, warehouses, products, setStocks, setProducts, logActivity]);
+
+  const recalculateInventory = useCallback(() => {
+    setProducts((prev) => syncProductQuantities(prev, stocks));
+    logActivity('settings_update', 'إعادة حساب المخزون من الأرصدة');
+  }, [stocks, setProducts, logActivity]);
 
   const addCustomer = useCallback<StoreContextType['addCustomer']>((data) => {
     const customer: Customer = { ...data, id: generateId(), createdAt: Date.now(), debt: data.debt ?? 0 };
@@ -1073,7 +1121,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       customerPaymentCounter, workerPaymentCounter, workerAdvanceCounter,
       unreadNotifications,
       getStock, getTotalStock, defaultMainWarehouseId, syncNow,
-      addProduct, updateProduct, deleteProduct,
+      addProduct, updateProduct, deleteProduct, updateProductQuantity, recalculateInventory,
       addCustomer, updateCustomer, deleteCustomer,
       addSupplier, updateSupplier, deleteSupplier,
       addWarehouse, updateWarehouse, deleteWarehouse,

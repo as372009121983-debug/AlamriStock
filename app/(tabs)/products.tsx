@@ -48,7 +48,7 @@ const emptyForm: FormState = {
 export default function ProductsScreen() {
   const {
     products, warehouses, addProduct, updateProduct, deleteProduct,
-    settings, defaultMainWarehouseId,
+    settings, defaultMainWarehouseId, updateProductQuantity, getStock,
   } = useStore();
   const { canEdit, user } = useAuth();
   const { showAlert } = useAlert();
@@ -114,27 +114,29 @@ export default function ProductsScreen() {
     setModalVisible(true);
   }
 
+  function doOpenEdit(product: Product) {
+    setEditing(product);
+    setForm({
+      name: product.name, barcode: product.barcode,
+      category: product.category || '', unit: product.unit || 'قطعة',
+      purchasePrice: String(product.purchasePrice), salePrice: String(product.salePrice),
+      quantity: String(product.quantity), lowStockAlert: String(product.lowStockAlert),
+      warehouseId: defaultMainWarehouseId || '',
+      prices: product.prices || [], images: product.images || [],
+      notes: product.notes || '',
+    });
+    setErrors({});
+    setShowPrices((product.prices || []).length > 0);
+    setShowBarcode(!!product.barcode);
+    setShowDetails(!!(product.category || product.notes || (product.images || []).length));
+    setModalVisible(true);
+  }
+
   function openEdit(product: Product) {
     guard({
       title: 'تعديل منتج',
       description: `أدخل كلمة مرور المدير لتعديل "${product.name}"`,
-      action: () => {
-        setEditing(product);
-        setForm({
-          name: product.name, barcode: product.barcode,
-          category: product.category || '', unit: product.unit || 'قطعة',
-          purchasePrice: String(product.purchasePrice), salePrice: String(product.salePrice),
-          quantity: String(product.quantity), lowStockAlert: String(product.lowStockAlert),
-          warehouseId: defaultMainWarehouseId || '',
-          prices: product.prices || [], images: product.images || [],
-          notes: product.notes || '',
-        });
-        setErrors({});
-        setShowPrices((product.prices || []).length > 0);
-        setShowBarcode(!!product.barcode);
-        setShowDetails(!!(product.category || product.notes || (product.images || []).length));
-        setModalVisible(true);
-      },
+      action: () => doOpenEdit(product),
     });
   }
 
@@ -179,6 +181,7 @@ export default function ProductsScreen() {
     if (!form.name.trim()) next.name = 'اسم المنتج مطلوب';
     if (form.salePrice && isNaN(Number(form.salePrice))) next.salePrice = 'سعر بيع غير صحيح';
     if (form.purchasePrice && isNaN(Number(form.purchasePrice))) next.purchasePrice = 'سعر شراء غير صحيح';
+    if (form.quantity && isNaN(Number(form.quantity))) next.quantity = 'كمية غير صحيحة';
     setErrors(next);
     if (Object.keys(next).length) return;
 
@@ -208,6 +211,18 @@ export default function ProductsScreen() {
 
     if (editing) {
       updateProduct(editing.id, payload);
+      const newQty = Number(form.quantity) || 0;
+      const oldQty = editing.quantity;
+      if (newQty !== oldQty && defaultMainWarehouseId) {
+        // Distribute the delta - put adjustment on main warehouse
+        const currentMainStock = getStock(editing.id, defaultMainWarehouseId);
+        const delta = newQty - oldQty;
+        const newMainStock = Math.max(0, currentMainStock + delta);
+        const result = updateProductQuantity(editing.id, defaultMainWarehouseId, newMainStock);
+        if (!result.ok) {
+          showAlert('تنبيه', result.message || 'تعذر تعديل الكمية');
+        }
+      }
       setModalVisible(false);
     } else {
       const res = addProduct(payload, form.warehouseId, Number(form.quantity) || 0);
@@ -338,7 +353,7 @@ export default function ProductsScreen() {
         />
 
         <View>
-          <Text style={styles.fieldLabel}>الكمية</Text>
+          <Text style={styles.fieldLabel}>الكمية {editing ? '(يمكن تعديلها بعد الإضافة)' : ''}</Text>
           <View style={styles.qtyRow}>
             <Pressable
               onPress={() => setUnitPickerVisible(true)}
@@ -354,9 +369,14 @@ export default function ProductsScreen() {
               onChangeText={(t) => setForm((p) => ({ ...p, quantity: t }))}
               placeholder="0.00"
               keyboardType="decimal-pad"
-              editable={!editing}
+              error={errors.quantity}
             />
           </View>
+          {editing ? (
+            <Text style={styles.qtyHint}>
+              تعديل الكمية يطبَّق على المخزن الرئيسي الافتراضي
+            </Text>
+          ) : null}
         </View>
 
         <View style={styles.priceRow}>
@@ -575,6 +595,7 @@ const styles = StyleSheet.create({
     ...Shadow.sm,
   },
   fieldLabel: { color: Colors.text, fontSize: FontSize.sm, fontWeight: FontWeight.medium, marginBottom: 8, textAlign: 'right' },
+  qtyHint: { fontSize: FontSize.xs, color: Colors.info, textAlign: 'right', marginTop: 4 },
   qtyRow: {
     flexDirection: 'row-reverse',
     alignItems: 'center',
