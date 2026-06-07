@@ -2,6 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -19,21 +21,26 @@ import { Header } from '@/components/ui/Header';
 import { useStore } from '@/hooks/useStore';
 import { useAlert, getSupabaseClient } from '@/template';
 import { Colors, FontSize, FontWeight, Radius, Shadow, Spacing } from '@/constants/theme';
-import { speakArabic, silenceVoice } from '@/services/notify';
-import { formatCurrency, isSameDay, isSameMonth } from '@/services/format';
+import { speakArabic, silenceVoice, isSpeaking } from '@/services/notify';
+import {
+  startRecording,
+  stopRecording,
+  cancelRecording,
+} from '@/services/voice-recording';
+import { isSameDay, isSameMonth } from '@/services/format';
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
   ts: number;
+  voice?: boolean;
 };
 
 const SUGGESTIONS = [
   'مبيعات اليوم كم؟',
   'ما المنتجات منخفضة الكمية؟',
   'أعطني نصائح لزيادة المبيعات',
-  'كيف أبدأ عرض ترويجي ذكي؟',
   'حلل لي أداء هذا الشهر',
 ];
 
@@ -41,43 +48,57 @@ export default function AIAssistantScreen() {
   const { products, customers, suppliers, sales, expenses, settings } = useStore();
   const { showAlert } = useAlert();
   const scrollRef = useRef<ScrollView | null>(null);
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const recordIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const liveModeRef = useRef(false);
+  const cancelledRef = useRef(false);
 
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       role: 'assistant',
-      text: '✓ مرحباً! أنا "ذكي" مساعدك الذكي.\n\nأقدر أحلل بياناتك، أعطيك نصائح، أحسب أرباحك، أو أقترح أفكار جديدة لمتجرك. اسألني أي حاجة!',
+      text: 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك، أو اضغط على الميكروفون وكلمني صوتياً، أو فعّل وضع المحادثة الحية.',
       ts: Date.now(),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [voiceOn, setVoiceOn] = useState<boolean>(settings.voiceEnabled !== false);
+  const [recording, setRecording] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [processing, setProcessing] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
 
-  // Build business context
+  // Live business data summary
   const businessContext = useMemo(() => {
     const now = Date.now();
     const todaySales = sales.filter((s) => isSameDay(s.date, now));
     const monthSales = sales.filter((s) => isSameMonth(s.date, now));
-    const monthExpenses = expenses.filter((e) => isSameMonth(e.date, now)).reduce((sum, e) => sum + e.amount, 0);
+    const monthExpenses = expenses
+      .filter((e) => isSameMonth(e.date, now))
+      .reduce((sum, e) => sum + e.amount, 0);
 
     const todayTotal = todaySales.reduce((sum, s) => sum + s.total, 0);
     const monthTotal = monthSales.reduce((sum, s) => sum + s.total, 0);
 
     const todayCost = todaySales.reduce(
-      (sum, s) => sum + s.items.reduce((c, it) => c + it.purchasePrice * it.quantity, 0),
+      (sum, s) =>
+        sum + s.items.reduce((c, it) => c + it.purchasePrice * it.quantity, 0),
       0
     );
     const monthCost = monthSales.reduce(
-      (sum, s) => sum + s.items.reduce((c, it) => c + it.purchasePrice * it.quantity, 0),
+      (sum, s) =>
+        sum + s.items.reduce((c, it) => c + it.purchasePrice * it.quantity, 0),
       0
     );
 
     const lowStock = products.filter((p) => p.quantity <= p.lowStockAlert);
-    const inventoryValue = products.reduce((sum, p) => sum + p.quantity * p.salePrice, 0);
+    const inventoryValue = products.reduce(
+      (sum, p) => sum + p.quantity * p.salePrice,
+      0
+    );
     const totalDebt = customers.reduce((sum, c) => sum + (c.debt || 0), 0);
 
-    // Top product
     const productSales = new Map<string, { name: string; total: number }>();
     sales.forEach((s) => {
       s.items.forEach((it) => {
@@ -86,17 +107,23 @@ export default function AIAssistantScreen() {
         productSales.set(it.productId, cur);
       });
     });
-    const topProduct = Array.from(productSales.values()).sort((a, b) => b.total - a.total)[0];
+    const topProduct = Array.from(productSales.values()).sort(
+      (a, b) => b.total - a.total
+    )[0];
 
-    // Top customer
     const customerSales = new Map<string, { name: string; total: number }>();
     sales.forEach((s) => {
       if (!s.customerId) return;
-      const cur = customerSales.get(s.customerId) || { name: s.customerName, total: 0 };
+      const cur = customerSales.get(s.customerId) || {
+        name: s.customerName,
+        total: 0,
+      };
       cur.total += s.total;
       customerSales.set(s.customerId, cur);
     });
-    const topCustomer = Array.from(customerSales.values()).sort((a, b) => b.total - a.total)[0];
+    const topCustomer = Array.from(customerSales.values()).sort(
+      (a, b) => b.total - a.total
+    )[0];
 
     return {
       productsCount: products.length,
@@ -112,8 +139,12 @@ export default function AIAssistantScreen() {
       monthProfit: Math.round(monthTotal - monthCost),
       monthExpenses: Math.round(monthExpenses),
       monthNet: Math.round(monthTotal - monthCost - monthExpenses),
-      topProduct: topProduct ? `${topProduct.name} (${Math.round(topProduct.total)} ${settings.currency})` : 'لا يوجد',
-      topCustomer: topCustomer ? `${topCustomer.name} (${Math.round(topCustomer.total)} ${settings.currency})` : 'لا يوجد',
+      topProduct: topProduct
+        ? `${topProduct.name} (${Math.round(topProduct.total)} ${settings.currency})`
+        : 'لا يوجد',
+      topCustomer: topCustomer
+        ? `${topCustomer.name} (${Math.round(topCustomer.total)} ${settings.currency})`
+        : 'لا يوجد',
       currency: settings.currency,
     };
   }, [products, customers, suppliers, sales, expenses, settings.currency]);
@@ -127,10 +158,36 @@ export default function AIAssistantScreen() {
 
   useEffect(() => {
     return () => {
-      // Stop any speech when leaving
+      cancelledRef.current = true;
+      liveModeRef.current = false;
       silenceVoice();
+      cancelRecording();
+      if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (recording) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 700,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.ease),
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0,
+            duration: 700,
+            useNativeDriver: true,
+            easing: Easing.inOut(Easing.ease),
+          }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.setValue(0);
+    }
+  }, [recording, pulseAnim]);
 
   async function send(text?: string) {
     const question = (text ?? input).trim();
@@ -152,7 +209,8 @@ export default function AIAssistantScreen() {
         body: {
           question,
           context: businessContext,
-          history: messages.slice(-10).map((m) => ({ role: m.role, text: m.text })),
+          history: messages.slice(-8).map((m) => ({ role: m.role, text: m.text })),
+          voice: voiceOn,
         },
       });
 
@@ -160,13 +218,13 @@ export default function AIAssistantScreen() {
         let errorMessage = error.message || 'حدث خطأ';
         if (error instanceof FunctionsHttpError) {
           try {
-            const text = await error.context?.text();
-            if (text) {
+            const t = await error.context?.text();
+            if (t) {
               try {
-                const parsed = JSON.parse(text);
-                errorMessage = parsed.error || errorMessage;
+                const p = JSON.parse(t);
+                errorMessage = p.error || errorMessage;
               } catch {
-                errorMessage = text.slice(0, 200);
+                errorMessage = t.slice(0, 200);
               }
             }
           } catch {}
@@ -184,15 +242,14 @@ export default function AIAssistantScreen() {
       setMessages((prev) => [...prev, assistantMsg]);
 
       if (voiceOn) {
-        // Speak the reply (truncate long replies)
-        const spoken = reply.length > 300 ? reply.slice(0, 300) + '...' : reply;
+        const spoken = reply.length > 600 ? reply.slice(0, 600) + '...' : reply;
         speakArabic(spoken);
       }
     } catch (e: any) {
       const errorMsg: Message = {
         id: `e_${Date.now()}`,
         role: 'assistant',
-        text: `⚠ حدث خطأ في الاتصال:\n${e?.message || 'تعذر الوصول للذكاء الاصطناعي'}\n\nتأكد من الاتصال بالإنترنت وحاول مرة أخرى.`,
+        text: `حدث خطأ في الاتصال: ${e?.message || 'تعذر الوصول للذكاء الاصطناعي'}. تأكد من الاتصال بالإنترنت.`,
         ts: Date.now(),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -201,13 +258,155 @@ export default function AIAssistantScreen() {
     }
   }
 
+  async function handleStartRecord() {
+    if (recording || processing || loading) return;
+    silenceVoice();
+    const result = await startRecording();
+    if (!result.ok) {
+      showAlert('تعذر التسجيل', result.error || 'لم يتم منح إذن الميكروفون');
+      // Disable live mode if mic permission denied
+      liveModeRef.current = false;
+      setLiveMode(false);
+      return;
+    }
+    setRecording(true);
+    setDuration(0);
+    if (recordIntervalRef.current) clearInterval(recordIntervalRef.current);
+    recordIntervalRef.current = setInterval(() => {
+      setDuration((d) => d + 1);
+    }, 1000);
+  }
+
+  async function handleStopRecord(shouldSend = true) {
+    if (!recording) return;
+    setRecording(false);
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+    const result = await stopRecording();
+    setDuration(0);
+    if (!result.ok || !result.base64) {
+      if (shouldSend) showAlert('تعذر التسجيل', result.error || 'حدث خطأ');
+      return;
+    }
+    if ((result.durationMs || 0) < 700) {
+      if (shouldSend) {
+        showAlert('التسجيل قصير', 'اضغط واستمر بالكلام لمدة ثانية على الأقل');
+      }
+      return;
+    }
+    if (shouldSend) await sendVoice(result.base64, result.format || 'm4a');
+  }
+
+  async function handleCancelRecord() {
+    if (!recording) return;
+    setRecording(false);
+    if (recordIntervalRef.current) {
+      clearInterval(recordIntervalRef.current);
+      recordIntervalRef.current = null;
+    }
+    await cancelRecording();
+    setDuration(0);
+  }
+
+  async function sendVoice(base64: string, format: string) {
+    setProcessing(true);
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase.functions.invoke('ai-voice-chat', {
+        body: {
+          audio: base64,
+          format,
+          context: businessContext,
+          history: messages.slice(-6).map((m) => ({ role: m.role, text: m.text })),
+        },
+      });
+
+      if (error) {
+        let errorMessage = error.message || 'حدث خطأ';
+        if (error instanceof FunctionsHttpError) {
+          try {
+            const t = await error.context?.text();
+            if (t) {
+              try {
+                const p = JSON.parse(t);
+                errorMessage = p.error || errorMessage;
+              } catch {
+                errorMessage = t.slice(0, 200);
+              }
+            }
+          } catch {}
+        }
+        throw new Error(errorMessage);
+      }
+
+      const transcription = (data?.transcription || '').trim();
+      const reply = (data?.reply || 'لم أفهم، حاول مرة أخرى').trim();
+
+      const userMsg: Message = {
+        id: `u_${Date.now()}`,
+        role: 'user',
+        text: transcription || 'رسالة صوتية',
+        ts: Date.now(),
+        voice: true,
+      };
+      const aiMsg: Message = {
+        id: `a_${Date.now()}`,
+        role: 'assistant',
+        text: reply,
+        ts: Date.now() + 1,
+        voice: true,
+      };
+      setMessages((prev) => [...prev, userMsg, aiMsg]);
+
+      // Always speak the reply for voice queries
+      const spoken = reply.length > 600 ? reply.slice(0, 600) + '...' : reply;
+      speakArabic(spoken);
+
+      // Live mode: auto-listen again after AI finishes speaking
+      if (liveModeRef.current && !cancelledRef.current) {
+        // Wait for speech to finish, then start a new recording
+        let waited = 0;
+        const max = 25000;
+        while (waited < max && (await isSpeaking())) {
+          await new Promise((r) => setTimeout(r, 250));
+          waited += 250;
+        }
+        // Brief pause for natural flow
+        await new Promise((r) => setTimeout(r, 400));
+        if (liveModeRef.current && !cancelledRef.current && !processing) {
+          handleStartRecord();
+        }
+      }
+    } catch (e: any) {
+      const errorMsg: Message = {
+        id: `e_${Date.now()}`,
+        role: 'assistant',
+        text: `تعذر معالجة الرسالة الصوتية: ${
+          e?.message || 'حاول مرة أخرى'
+        }. تأكد من الاتصال بالإنترنت أو جرب الكتابة بدلاً من الصوت.`,
+        ts: Date.now(),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+      // Stop live mode on error
+      liveModeRef.current = false;
+      setLiveMode(false);
+    } finally {
+      setProcessing(false);
+    }
+  }
+
   function clearChat() {
     silenceVoice();
+    liveModeRef.current = false;
+    setLiveMode(false);
+    handleCancelRecord();
     setMessages([
       {
         id: 'welcome',
         role: 'assistant',
-        text: '✓ مرحباً! أنا "ذكي" مساعدك الذكي.\n\nأقدر أحلل بياناتك، أعطيك نصائح، أحسب أرباحك، أو أقترح أفكار جديدة لمتجرك. اسألني أي حاجة!',
+        text: 'مرحباً، أنا "ذكي" مساعدك الذكي. اسألني عن مبيعاتك أو أرباحك، أو اضغط على الميكروفون وكلمني صوتياً.',
         ts: Date.now(),
       },
     ]);
@@ -218,11 +417,39 @@ export default function AIAssistantScreen() {
     setVoiceOn((v) => !v);
   }
 
+  async function toggleLiveMode() {
+    if (liveModeRef.current) {
+      // Turn off
+      liveModeRef.current = false;
+      setLiveMode(false);
+      silenceVoice();
+      await handleCancelRecord();
+    } else {
+      // Turn on
+      liveModeRef.current = true;
+      setLiveMode(true);
+      // Start recording right away
+      setTimeout(() => handleStartRecord(), 150);
+    }
+  }
+
+  const formatDuration = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Header
         title="المساعد الذكي"
-        subtitle="مدعوم بالذكاء الاصطناعي"
+        subtitle={
+          liveMode
+            ? 'وضع المحادثة الحية نشط'
+            : processing
+            ? 'يستمع ويفكر...'
+            : 'مدعوم بالذكاء الاصطناعي'
+        }
         right={
           <View style={{ flexDirection: 'row-reverse', gap: 4 }}>
             <Pressable onPress={toggleVoice} hitSlop={8} style={styles.headerBtn}>
@@ -242,7 +469,6 @@ export default function AIAssistantScreen() {
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <ScrollView
           ref={scrollRef}
@@ -251,18 +477,45 @@ export default function AIAssistantScreen() {
           showsVerticalScrollIndicator={false}
         >
           <LinearGradient
-            colors={['#0F766E', '#14B8A6']}
+            colors={liveMode ? ['#DC2626', '#F97316'] : ['#0F766E', '#14B8A6']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.heroCard}
           >
             <View style={styles.heroIcon}>
-              <MaterialCommunityIcons name="robot-happy" size={32} color={Colors.white} />
+              <MaterialCommunityIcons
+                name={liveMode ? 'phone-in-talk' : 'robot-happy'}
+                size={32}
+                color={Colors.white}
+              />
             </View>
-            <Text style={styles.heroTitle}>ذكي - مساعدك الذكي</Text>
-            <Text style={styles.heroSub}>
-              اسأل عن مبيعاتك، أرباحك، مخزونك أو احصل على نصائح ذكية لمتجرك
+            <Text style={styles.heroTitle}>
+              {liveMode ? 'محادثة حية مفتوحة' : 'ذكي - مساعدك الذكي'}
             </Text>
+            <Text style={styles.heroSub}>
+              {liveMode
+                ? 'كلّم بشكل طبيعي. الميكروفون يستمع تلقائياً بعد كل رد.'
+                : 'اضغط الميكروفون وكلمني، أو فعّل المحادثة الحية للاستمرار في الكلام'}
+            </Text>
+
+            <Pressable
+              onPress={toggleLiveMode}
+              style={[styles.liveModeBtn, liveMode && styles.liveModeBtnActive]}
+            >
+              <MaterialCommunityIcons
+                name={liveMode ? 'phone-hangup' : 'phone-in-talk'}
+                size={18}
+                color={liveMode ? Colors.danger : Colors.white}
+              />
+              <Text
+                style={[
+                  styles.liveModeText,
+                  liveMode && { color: Colors.danger },
+                ]}
+              >
+                {liveMode ? 'إنهاء المكالمة' : 'بدء محادثة حية'}
+              </Text>
+            </Pressable>
           </LinearGradient>
 
           {messages.map((m) => (
@@ -276,9 +529,30 @@ export default function AIAssistantScreen() {
               {m.role === 'assistant' ? (
                 <View style={styles.assistantHeader}>
                   <View style={styles.assistantAvatar}>
-                    <MaterialCommunityIcons name="robot-happy-outline" size={14} color={Colors.primary} />
+                    <MaterialCommunityIcons
+                      name="robot-happy-outline"
+                      size={14}
+                      color={Colors.primary}
+                    />
                   </View>
                   <Text style={styles.assistantName}>ذكي</Text>
+                  {m.voice ? (
+                    <MaterialCommunityIcons
+                      name="volume-high"
+                      size={12}
+                      color={Colors.primary}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+              {m.role === 'user' && m.voice ? (
+                <View style={styles.userVoiceBadge}>
+                  <MaterialCommunityIcons
+                    name="microphone"
+                    size={11}
+                    color="rgba(255,255,255,0.85)"
+                  />
+                  <Text style={styles.userVoiceText}>صوتي</Text>
                 </View>
               ) : null}
               <Text
@@ -292,31 +566,44 @@ export default function AIAssistantScreen() {
             </View>
           ))}
 
-          {loading ? (
+          {(loading || processing) ? (
             <View style={[styles.bubble, styles.bubbleAssistant]}>
               <View style={styles.assistantHeader}>
                 <View style={styles.assistantAvatar}>
-                  <MaterialCommunityIcons name="robot-happy-outline" size={14} color={Colors.primary} />
+                  <MaterialCommunityIcons
+                    name="robot-happy-outline"
+                    size={14}
+                    color={Colors.primary}
+                  />
                 </View>
                 <Text style={styles.assistantName}>ذكي</Text>
               </View>
               <View style={styles.thinkingRow}>
                 <ActivityIndicator size="small" color={Colors.primary} />
-                <Text style={styles.thinkingText}>يفكر...</Text>
+                <Text style={styles.thinkingText}>
+                  {processing ? 'يستمع ويفكر...' : 'يفكر...'}
+                </Text>
               </View>
             </View>
           ) : null}
 
-          {messages.length <= 1 && !loading ? (
+          {messages.length <= 1 && !loading && !processing ? (
             <View style={styles.suggestionsWrap}>
               <Text style={styles.suggestionsTitle}>أمثلة جاهزة:</Text>
               {SUGGESTIONS.map((s) => (
                 <Pressable
                   key={s}
                   onPress={() => send(s)}
-                  style={({ pressed }) => [styles.suggestionChip, pressed && { opacity: 0.85 }]}
+                  style={({ pressed }) => [
+                    styles.suggestionChip,
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
-                  <MaterialCommunityIcons name="message-text-outline" size={14} color={Colors.primary} />
+                  <MaterialCommunityIcons
+                    name="message-text-outline"
+                    size={14}
+                    color={Colors.primary}
+                  />
                   <Text style={styles.suggestionText}>{s}</Text>
                 </Pressable>
               ))}
@@ -324,13 +611,70 @@ export default function AIAssistantScreen() {
           ) : null}
         </ScrollView>
 
+        {recording ? (
+          <View style={styles.recordingBanner}>
+            <Pressable
+              onPress={handleCancelRecord}
+              hitSlop={8}
+              style={styles.recCancelBtn}
+            >
+              <MaterialCommunityIcons name="close" size={20} color={Colors.danger} />
+            </Pressable>
+            <Animated.View
+              style={[
+                styles.recDot,
+                {
+                  opacity: pulseAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.3, 1],
+                  }),
+                  transform: [
+                    {
+                      scale: pulseAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [1, 1.4],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+            <Text style={styles.recText}>يجري التسجيل...</Text>
+            <Text style={styles.recTimer}>{formatDuration(duration)}</Text>
+            <Pressable
+              onPress={() => handleStopRecord(true)}
+              style={styles.recDoneBtn}
+              hitSlop={8}
+            >
+              <MaterialCommunityIcons name="check" size={22} color={Colors.white} />
+            </Pressable>
+          </View>
+        ) : null}
+
         <View style={styles.composer}>
           <Pressable
+            onPress={recording ? () => handleStopRecord(true) : handleStartRecord}
+            disabled={loading || processing}
+            style={({ pressed }) => [
+              styles.micBtn,
+              recording && styles.micBtnRecording,
+              (loading || processing) && { opacity: 0.5 },
+              pressed && { opacity: 0.85 },
+            ]}
+            hitSlop={6}
+          >
+            <MaterialCommunityIcons
+              name={recording ? 'stop' : 'microphone'}
+              size={22}
+              color={recording ? Colors.white : Colors.primary}
+            />
+          </Pressable>
+          <Pressable
             onPress={() => send()}
-            disabled={!input.trim() || loading}
+            disabled={!input.trim() || loading || processing}
             style={({ pressed }) => [
               styles.sendBtn,
-              (!input.trim() || loading) && { opacity: 0.5 },
+              (!input.trim() || loading || processing) && { opacity: 0.5 },
               pressed && { opacity: 0.85 },
             ]}
             hitSlop={6}
@@ -345,13 +689,14 @@ export default function AIAssistantScreen() {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="اكتب سؤالك هنا..."
+            placeholder="اكتب أو اضغط الميكروفون..."
             placeholderTextColor={Colors.textMuted}
             style={styles.composerInput}
             multiline
             maxLength={500}
             textAlign="right"
             writingDirection="rtl"
+            editable={!recording && !processing}
           />
         </View>
       </KeyboardAvoidingView>
@@ -381,7 +726,34 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   heroTitle: { fontSize: FontSize.xl, fontWeight: FontWeight.bold, color: Colors.white },
-  heroSub: { fontSize: FontSize.sm, color: 'rgba(255,255,255,0.92)', textAlign: 'right', lineHeight: 20 },
+  heroSub: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'right',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  liveModeBtn: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 9,
+    borderRadius: Radius.full,
+    alignSelf: 'flex-end',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  liveModeBtnActive: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.white,
+  },
+  liveModeText: {
+    color: Colors.white,
+    fontWeight: FontWeight.bold,
+    fontSize: FontSize.sm,
+  },
   bubble: {
     maxWidth: '88%',
     padding: Spacing.md,
@@ -415,11 +787,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  assistantName: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: FontWeight.bold },
+  assistantName: {
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    fontWeight: FontWeight.bold,
+  },
+  userVoiceBadge: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.sm,
+    alignSelf: 'flex-end',
+  },
+  userVoiceText: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.92)',
+    fontWeight: FontWeight.bold,
+  },
   bubbleText: { fontSize: FontSize.md, lineHeight: 22, textAlign: 'right' },
   bubbleTextUser: { color: Colors.white },
   bubbleTextAssistant: { color: Colors.text },
-  thinkingRow: { flexDirection: 'row-reverse', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  thinkingRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
   thinkingText: { color: Colors.textSecondary, fontSize: FontSize.sm },
   suggestionsWrap: {
     marginTop: Spacing.lg,
@@ -453,6 +849,55 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
   },
+  recordingBanner: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    backgroundColor: Colors.dangerSoft,
+    borderTopWidth: 1,
+    borderColor: Colors.danger,
+  },
+  recCancelBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.danger,
+  },
+  recDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: Colors.danger,
+  },
+  recText: {
+    color: Colors.danger,
+    fontWeight: FontWeight.bold,
+    fontSize: FontSize.sm,
+    flex: 1,
+    textAlign: 'right',
+  },
+  recTimer: {
+    color: Colors.danger,
+    fontWeight: FontWeight.bold,
+    fontSize: FontSize.md,
+    fontVariant: ['tabular-nums'],
+    minWidth: 50,
+    textAlign: 'center',
+  },
+  recDoneBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   composer: {
     flexDirection: 'row-reverse',
     alignItems: 'flex-end',
@@ -480,5 +925,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  micBtnRecording: {
+    backgroundColor: Colors.danger,
+    borderColor: Colors.danger,
   },
 });

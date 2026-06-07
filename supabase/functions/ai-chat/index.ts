@@ -12,14 +12,12 @@ serve(async (req) => {
     const question: string = body?.question || '';
     const context = body?.context || {};
     const history = Array.isArray(body?.history) ? body.history : [];
+    const isVoice: boolean = body?.voice === true;
 
     if (!question.trim()) {
       return new Response(
         JSON.stringify({ error: 'يجب توفير سؤال' }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -29,55 +27,41 @@ serve(async (req) => {
     if (!apiKey || !baseUrl) {
       return new Response(
         JSON.stringify({ error: 'OnSpace AI: missing configuration' }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const systemPrompt = `أنت مساعد ذكي وذكي ومحترف لتطبيق إدارة المتاجر والمخازن العربي. اسمك "ذكي".
-مهمتك أن تجيب باللغة العربية الفصحى فقط بإيجاز وذكاء، وأن تبهر المستخدم بإجاباتك.
+    const cur = context.currency || 'جنيه';
+    const systemPrompt = `أنت "ذكي"، مساعد ذكاء اصطناعي خبير لإدارة متاجر ومخازن باللغة العربية.
 
-أنت خبير في:
-- إدارة المخزون والمنتجات
-- تحليل المبيعات والأرباح
-- نصائح تسويقية واقتصادية للمتاجر الصغيرة والمتوسطة
-- اقتراح خطط وعروض ذكية
-- حل المشاكل المحاسبية اليومية
+قواعد إجاباتك (مهم جداً):
+- اللغة: العربية الفصحى الواضحة والسهلة فقط
+- الطول: ${isVoice ? 'جملة أو جملتين قصيرتين فقط لأن إجابتك ستُنطق بصوت عالٍ' : '1-4 جمل قصيرة وذكية'}
+- استخدم الأرقام الفعلية من البيانات أدناه دون تعديل
+- ${isVoice ? 'ممنوع نهائياً استخدام أي رموز أو إيموجي أو أحرف خاصة (لأنها ستُقرأ بصوت)' : 'ممنوع استخدام إيموجي أو رموز معقدة'}
+- كن مباشراً، عملياً، ودوداً، ذكياً، واقترح إجراءات قابلة للتنفيذ فوراً
 
-معلومات المتجر الحالي للسياق:
-- عدد المنتجات: ${context.productsCount ?? 0}
+بيانات المتجر اللحظية:
+- المنتجات: ${context.productsCount ?? 0}
 - منتجات منخفضة الكمية: ${context.lowStockCount ?? 0}
-- قيمة المخزون بسعر البيع: ${context.inventoryValue ?? 0} ${context.currency || 'جنيه'}
-- عدد العملاء: ${context.customersCount ?? 0}
-- إجمالي ديون العملاء: ${context.totalDebt ?? 0} ${context.currency || 'جنيه'}
-- عدد الموردين: ${context.suppliersCount ?? 0}
-- مبيعات اليوم: ${context.todaySales ?? 0} ${context.currency || 'جنيه'}
-- عدد فواتير اليوم: ${context.todaySalesCount ?? 0}
-- مبيعات الشهر: ${context.monthSales ?? 0} ${context.currency || 'جنيه'}
-- ربح اليوم: ${context.todayProfit ?? 0} ${context.currency || 'جنيه'}
-- ربح الشهر: ${context.monthProfit ?? 0} ${context.currency || 'جنيه'}
-- مصروفات الشهر: ${context.monthExpenses ?? 0} ${context.currency || 'جنيه'}
-- صافي الشهر: ${context.monthNet ?? 0} ${context.currency || 'جنيه'}
+- قيمة المخزون بسعر البيع: ${context.inventoryValue ?? 0} ${cur}
+- العملاء: ${context.customersCount ?? 0}
+- إجمالي ديون العملاء: ${context.totalDebt ?? 0} ${cur}
+- الموردين: ${context.suppliersCount ?? 0}
+- مبيعات اليوم: ${context.todaySales ?? 0} ${cur} (${context.todaySalesCount ?? 0} فاتورة)
+- ربح اليوم: ${context.todayProfit ?? 0} ${cur}
+- مبيعات الشهر: ${context.monthSales ?? 0} ${cur}
+- ربح الشهر: ${context.monthProfit ?? 0} ${cur}
+- مصروفات الشهر: ${context.monthExpenses ?? 0} ${cur}
+- صافي الشهر: ${context.monthNet ?? 0} ${cur}
 - أكثر منتج مبيعاً: ${context.topProduct ?? 'لا يوجد'}
 - أهم عميل: ${context.topCustomer ?? 'لا يوجد'}
 
-تعليمات مهمة:
-1. ابدأ كل إجابة بجملة قصيرة جذابة
-2. استخدم الأرقام الفعلية من البيانات أعلاه
-3. قدم نصائح عملية قابلة للتنفيذ فوراً
-4. استخدم رموز تعبيرية بسيطة باعتدال (✓ • → 💡)
-5. إذا كانت البيانات غير كافية للإجابة، اطلب توضيحاً
-6. لا تستخدم أي لغة غير العربية
-7. اقترح إجراءات ذكية بناءً على البيانات (مثل: "أنصحك بطلب توريد للمنتج X لأن كميته منخفضة")
-8. اجعل الإجابة قصيرة 2-5 أسطر، إلا إذا طُلب التفصيل
-
-أبهر المستخدم!`;
+أبهر المستخدم بإجابات قصيرة وذكية ومبنية على بياناته الحقيقية!`;
 
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history.slice(-10).map((h: any) => ({
+      ...history.slice(-8).map((h: any) => ({
         role: h.role === 'user' ? 'user' : 'assistant',
         content: String(h.text || ''),
       })),
@@ -93,8 +77,8 @@ serve(async (req) => {
       body: JSON.stringify({
         model: 'google/gemini-3-flash-preview',
         messages,
-        temperature: 0.7,
-        max_tokens: 800,
+        temperature: 0.55,
+        max_tokens: isVoice ? 220 : 450,
       }),
     });
 
@@ -103,12 +87,9 @@ serve(async (req) => {
       console.error('OnSpace AI error:', response.status, errText);
       return new Response(
         JSON.stringify({
-          error: `OnSpace AI: ${response.status} ${errText.slice(0, 300)}`,
+          error: `OnSpace AI: ${response.status} ${errText.slice(0, 250)}`,
         }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -122,10 +103,7 @@ serve(async (req) => {
     console.error('AI chat exception:', e);
     return new Response(
       JSON.stringify({ error: e?.message || 'Internal server error' }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
